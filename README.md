@@ -942,6 +942,553 @@ $Script | Out-File "C:\Scripts\DailySecurityCheck.ps1"
 
 ---
 
+## 📘 Complete Feature Examples
+
+This section provides examples for **EVERY available feature**, not just the major ones.
+
+### Basic Parameters
+
+#### `-UserName` - Query Specific User
+```powershell
+# Find specific user across all sources
+.\users\users.ps1 -IncludeEntraID -IncludeAD -IncludeLocal -UserName "john.doe"
+```
+
+#### `-MaxRecords` - Limit Results
+```powershell
+# Get only first 50 users (faster for testing)
+.\users\users.ps1 -IncludeEntraID -ListUsers -MaxRecords 50
+```
+
+#### `-ComputerName` - Target Specific Computer
+```powershell
+# Query remote computer
+.\users\users.ps1 -IncludeLocal -ListUsers -ComputerName "SERVER01"
+```
+
+---
+
+### Data Source Parameters
+
+#### `-IncludeLocal` - Local Accounts
+```powershell
+# Audit local accounts on this machine
+.\users\users.ps1 -IncludeLocal -ListUsers
+```
+
+#### `-IncludeAD` - Active Directory
+```powershell
+# Audit on-premises AD users
+.\users\users.ps1 -IncludeAD -ListUsers
+```
+
+#### `-IncludeEntraID` - Cloud Identities
+```powershell
+# Audit Microsoft 365 / Azure AD users
+.\users\users.ps1 -IncludeEntraID -ListUsers
+```
+
+#### Combined Sources
+```powershell
+# Comprehensive audit across all identity systems
+.\users\users.ps1 -IncludeEntraID -IncludeAD -IncludeLocal -ListUsers
+```
+
+---
+
+### Display and Output Parameters
+
+#### `-ListUsers` - User List Format
+```powershell
+# Show users instead of login events
+.\users\users.ps1 -IncludeEntraID -ListUsers
+```
+
+#### `-IncludePIN` - Windows Hello for Business Status
+```powershell
+# Check WHfB PIN registration and last WHfB sign-in
+.\users\users.ps1 -IncludeEntraID -ListUsers -IncludePIN
+```
+
+#### `-Minimal` - Compact View
+```powershell
+# Show only essential columns (User, Rights, MFA, Roles, Last Login)
+.\users\users.ps1 -IncludeEntraID -ListUsers -Minimal
+```
+
+#### `-OutGridView` - Interactive GUI Table
+```powershell
+# Display in sortable, filterable grid view
+.\users\users.ps1 -IncludeEntraID -ListUsers -OutGridView
+```
+
+---
+
+### Export Parameters
+
+#### `-ExportExcel` - Excel Export
+```powershell
+# Export to Excel file
+.\users\users.ps1 -IncludeEntraID -ListUsers -ExportExcel -ExcelPath "Report.xlsx"
+```
+
+#### `-ExcelWorksheet` - Custom Worksheet Name
+```powershell
+# Specify worksheet name
+.\users\users.ps1 -IncludeEntraID -ListUsers -ExportExcel -ExcelPath "Report.xlsx" -ExcelWorksheet "EntraID_Users"
+```
+
+#### `-OutputDirectory` - Organize Exports
+```powershell
+# Save all exports to specific folder
+.\users\users.ps1 -IncludeEntraID -ListUsers -OutputDirectory "C:\Reports\Monthly" -ExportExcel -ExcelPath "Users.xlsx"
+```
+
+#### `-IncludeExportFormats` - All Formats
+```powershell
+# Export to Excel, CSV, JSON, HTML, and XML
+.\users\users.ps1 -IncludeEntraID -ListUsers -ExportExcel -ExcelPath "Report.xlsx" -IncludeExportFormats
+```
+
+---
+
+### Security Analysis Parameters
+
+#### `-IncludeRiskScore` - Security Risk Assessment
+```powershell
+# Calculate security risk scores for each user
+.\users\users.ps1 -IncludeEntraID -ListUsers -IncludeRiskScore
+```
+**What it shows:** Risk level (Critical/High/Medium/Low/Minimal) with color coding
+
+#### `-IncludePrivilegedAccounts` - Privileged Account Analysis
+```powershell
+# Identify and flag privileged accounts
+.\users\users.ps1 -IncludeEntraID -IncludeAD -ListUsers -IncludePrivilegedAccounts
+```
+**What it shows:** Admin rights, privileged roles, elevated permissions
+
+#### `-IncludeServiceAccounts` - Service Account Detection
+```powershell
+# Detect non-interactive service accounts
+.\users\users.ps1 -IncludeEntraID -IncludeAD -ListUsers -IncludeServiceAccounts
+```
+**What it shows:** Service accounts, application accounts, automated accounts
+
+#### `-IncludeGuestUsers` - Guest User Analysis
+```powershell
+# Analyze external/guest users
+.\users\users.ps1 -IncludeEntraID -ListUsers -IncludeGuestUsers
+```
+**What it shows:** Guest status, access expiration, external domains
+
+#### `-IncludePasswordPolicy` - Password Compliance
+```powershell
+# Check password policy compliance
+.\users\users.ps1 -IncludeEntraID -IncludeAD -ListUsers -IncludePasswordPolicy
+```
+**What it shows:** Password age, complexity, expiration, policy violations
+
+#### `-IncludeAccountLockout` - Lockout Analysis
+```powershell
+# Analyze lockout events and failed logins
+.\users\users.ps1 -IncludeLocal -IncludeAD -ListUsers -IncludeAccountLockout
+```
+**What it shows:** Lockout status, failed login attempts, lockout risks
+
+#### `-IncludeDeviceCompliance` - Device Status (Entra ID)
+```powershell
+# Check device compliance status
+.\users\users.ps1 -IncludeEntraID -ListUsers -IncludeDeviceCompliance
+```
+**What it shows:** Managed devices, compliance status, device trust
+
+#### `-IncludeConditionalAccess` - Conditional Access Policies
+```powershell
+# Analyze Conditional Access policy impact
+.\users\users.ps1 -IncludeEntraID -ListUsers -IncludeConditionalAccess
+```
+**What it shows:** Applied policies, policy compliance, access restrictions
+
+#### `-IncludeRiskySignins` - Identity Protection
+```powershell
+# Include risky sign-in detection
+.\users\users.ps1 -IncludeEntraID -ListUsers -IncludeRiskySignins
+```
+**What it shows:** Risk detections, risky sign-ins, threat indicators
+
+#### `-IncludeGroupMembership` - Group Analysis
+```powershell
+# Analyze group memberships and nested groups
+.\users\users.ps1 -IncludeEntraID -IncludeAD -ListUsers -IncludeGroupMembership
+```
+**What it shows:** Group memberships, nested groups, role assignments
+
+#### `-IncludeAppPermissions` - Application Permissions
+```powershell
+# Audit app permissions and consent grants
+.\users\users.ps1 -IncludeEntraID -ListUsers -IncludeAppPermissions
+```
+**What it shows:** App permissions, consent grants, OAuth apps
+
+---
+
+### Advanced Filtering Parameters
+
+#### `-FilterByDepartment` - Department Filter
+```powershell
+# Show only IT department users
+.\users\users.ps1 -IncludeEntraID -ListUsers -FilterByDepartment "IT"
+
+# Partial match works too
+.\users\users.ps1 -IncludeEntraID -ListUsers -FilterByDepartment "Information Technology"
+```
+
+#### `-FilterByLocation` - Location Filter
+```powershell
+# Show only users in New York office
+.\users\users.ps1 -IncludeEntraID -ListUsers -FilterByLocation "New York"
+
+# Multiple locations - run separately and combine
+.\users\users.ps1 -IncludeEntraID -ListUsers -FilterByLocation "London"
+```
+
+#### `-FilterByJobTitle` - Job Title Filter
+```powershell
+# Show only managers
+.\users\users.ps1 -IncludeEntraID -ListUsers -FilterByJobTitle "Manager"
+
+# Show directors and above
+.\users\users.ps1 -IncludeEntraID -ListUsers -FilterByJobTitle "Director"
+```
+
+#### `-LastLoginAfter` - Date Range Filter (After)
+```powershell
+# Users who logged in after Jan 1, 2025
+.\users\users.ps1 -IncludeEntraID -ListUsers -LastLoginAfter "2025-01-01"
+
+# Users who logged in this week
+.\users\users.ps1 -IncludeEntraID -ListUsers -LastLoginAfter (Get-Date).AddDays(-7)
+```
+
+#### `-LastLoginBefore` - Date Range Filter (Before)
+```powershell
+# Users who logged in before Jan 1, 2025
+.\users\users.ps1 -IncludeEntraID -ListUsers -LastLoginBefore "2025-01-01"
+
+# Users who haven't logged in recently
+.\users\users.ps1 -IncludeEntraID -ListUsers -LastLoginBefore (Get-Date).AddDays(-30)
+```
+
+#### `-FilterByRiskLevel` - Risk Level Filter
+```powershell
+# Critical risk users only
+.\users\users.ps1 -IncludeEntraID -ListUsers -IncludeRiskScore -FilterByRiskLevel "Critical"
+
+# High risk users
+.\users\users.ps1 -IncludeEntraID -ListUsers -IncludeRiskScore -FilterByRiskLevel "High"
+
+# Low risk users
+.\users\users.ps1 -IncludeEntraID -ListUsers -IncludeRiskScore -FilterByRiskLevel "Low"
+```
+
+#### `-ShowOnlyNoMFA` - MFA Filter
+```powershell
+# Show only users WITHOUT MFA
+.\users\users.ps1 -IncludeEntraID -ListUsers -ShowOnlyNoMFA
+
+# Critical: Privileged accounts without MFA
+.\users\users.ps1 -IncludeEntraID -ListUsers -ShowOnlyNoMFA -ShowOnlyPrivileged
+```
+
+#### `-ShowOnlyPrivileged` - Privileged Filter
+```powershell
+# Show only privileged/admin accounts
+.\users\users.ps1 -IncludeEntraID -IncludeAD -ListUsers -ShowOnlyPrivileged
+```
+
+#### `-ShowOnlyDisabled` - Disabled Account Filter
+```powershell
+# Show only disabled accounts
+.\users\users.ps1 -IncludeEntraID -IncludeAD -ListUsers -ShowOnlyDisabled
+```
+
+#### `-ShowOnlyGuests` - Guest User Filter
+```powershell
+# Show only guest/external users
+.\users\users.ps1 -IncludeEntraID -ListUsers -ShowOnlyGuests
+
+# Guest users without MFA (security risk!)
+.\users\users.ps1 -IncludeEntraID -ListUsers -ShowOnlyGuests -ShowOnlyNoMFA
+```
+
+#### `-InactiveDays` - Inactivity Filter
+```powershell
+# Users inactive for 30+ days
+.\users\users.ps1 -IncludeEntraID -ListUsers -InactiveDays 30
+
+# Users inactive for 90+ days (common threshold)
+.\users\users.ps1 -IncludeEntraID -ListUsers -InactiveDays 90
+
+# Users inactive for 180+ days (cleanup candidates)
+.\users\users.ps1 -IncludeEntraID -ListUsers -InactiveDays 180
+```
+
+---
+
+### Caching Parameters
+
+#### `-UseCache` - Enable Caching
+```powershell
+# First run: fetches fresh data and caches it
+.\users\users.ps1 -IncludeEntraID -ListUsers -UseCache
+
+# Second run: uses cached data (much faster!)
+.\users\users.ps1 -IncludeEntraID -ListUsers -UseCache -FilterByDepartment "IT"
+```
+
+#### `-CacheExpiryMinutes` - Cache Duration
+```powershell
+# Cache expires after 30 minutes
+.\users\users.ps1 -IncludeEntraID -ListUsers -UseCache -CacheExpiryMinutes 30
+
+# Cache expires after 2 hours (120 minutes)
+.\users\users.ps1 -IncludeEntraID -ListUsers -UseCache -CacheExpiryMinutes 120
+```
+
+#### `-ClearCache` - Clear Cached Data
+```powershell
+# Clear cache before running (force fresh data)
+.\users\users.ps1 -IncludeEntraID -ListUsers -ClearCache
+```
+
+---
+
+### Compliance Parameters
+
+#### `-ComplianceFramework` - Generate Compliance Reports
+```powershell
+# SOX compliance report
+.\users\users.ps1 -IncludeEntraID -ListUsers -ComplianceFramework "SOX"
+
+# HIPAA compliance report
+.\users\users.ps1 -IncludeEntraID -ListUsers -ComplianceFramework "HIPAA"
+
+# GDPR compliance report
+.\users\users.ps1 -IncludeEntraID -ListUsers -ComplianceFramework "GDPR"
+
+# PCI-DSS compliance report
+.\users\users.ps1 -IncludeEntraID -ListUsers -ComplianceFramework "PCI-DSS"
+
+# ISO 27001 compliance report
+.\users\users.ps1 -IncludeEntraID -ListUsers -ComplianceFramework "ISO27001"
+
+# NIST Cybersecurity Framework report
+.\users\users.ps1 -IncludeEntraID -ListUsers -ComplianceFramework "NIST"
+
+# CIS Controls v8 report
+.\users\users.ps1 -IncludeEntraID -ListUsers -ComplianceFramework "CIS"
+
+# All frameworks at once
+.\users\users.ps1 -IncludeEntraID -ListUsers -ComplianceFramework "All"
+
+# Multiple specific frameworks
+.\users\users.ps1 -IncludeEntraID -ListUsers -ComplianceFramework "SOX","HIPAA","PCI-DSS"
+```
+
+---
+
+### Utility Parameters
+
+#### `-Help` - Display Help
+```powershell
+# Show help information
+.\users\users.ps1 -Help
+```
+
+#### `-ConfigFile` - Use Configuration File
+```powershell
+# Load settings from JSON config file
+.\users\users.ps1 -ConfigFile "C:\Config\audit-config.json"
+```
+
+#### `-Profile` - Use Predefined Profile
+```powershell
+# Quick profile (minimal data, fast)
+.\users\users.ps1 -Profile Quick
+
+# Comprehensive profile (all features)
+.\users\users.ps1 -Profile Comprehensive
+
+# Security profile (security-focused features)
+.\users\users.ps1 -Profile Security
+```
+
+---
+
+### Combined Feature Examples
+
+#### Complete Security Audit
+```powershell
+# Everything security-related
+.\users\users.ps1 -IncludeEntraID -IncludeAD -IncludeLocal -ListUsers `
+    -IncludeRiskScore `
+    -IncludePrivilegedAccounts `
+    -IncludeServiceAccounts `
+    -IncludeGuestUsers `
+    -IncludePasswordPolicy `
+    -IncludeAccountLockout `
+    -IncludeDeviceCompliance `
+    -IncludeConditionalAccess `
+    -IncludeRiskySignins `
+    -IncludeGroupMembership `
+    -IncludeAppPermissions `
+    -ExportExcel -ExcelPath "Complete_Security_Audit.xlsx" `
+    -IncludeExportFormats
+```
+
+#### Privileged Account Deep Dive
+```powershell
+# Comprehensive privileged account analysis
+.\users\users.ps1 -IncludeEntraID -IncludeAD -ListUsers `
+    -ShowOnlyPrivileged `
+    -IncludeRiskScore `
+    -IncludePasswordPolicy `
+    -IncludeAccountLockout `
+    -IncludeGroupMembership `
+    -IncludeConditionalAccess `
+    -ComplianceFramework "SOX","ISO27001","CIS" `
+    -OutputDirectory "C:\PrivilegedAccounts\$(Get-Date -Format 'yyyy-MM-dd')" `
+    -ExportExcel -ExcelPath "Privileged_Accounts_Audit.xlsx" `
+    -IncludeExportFormats
+```
+
+#### Guest User Security Review
+```powershell
+# Comprehensive guest user analysis
+.\users\users.ps1 -IncludeEntraID -ListUsers `
+    -ShowOnlyGuests `
+    -IncludeRiskScore `
+    -IncludeGuestUsers `
+    -IncludeConditionalAccess `
+    -IncludeAppPermissions `
+    -ComplianceFramework "GDPR","ISO27001" `
+    -ExportExcel -ExcelPath "Guest_User_Review.xlsx"
+```
+
+#### Department Security Assessment
+```powershell
+# IT department comprehensive audit
+.\users\users.ps1 -IncludeEntraID -IncludeAD -ListUsers `
+    -FilterByDepartment "IT" `
+    -IncludeRiskScore `
+    -IncludePrivilegedAccounts `
+    -IncludePasswordPolicy `
+    -IncludeAccountLockout `
+    -IncludeGroupMembership `
+    -ComplianceFramework "All" `
+    -OutputDirectory "C:\Reports\Departments\IT\$(Get-Date -Format 'yyyy-MM')" `
+    -ExportExcel -ExcelPath "IT_Department_Audit.xlsx" `
+    -IncludeExportFormats
+```
+
+#### Inactive Account Cleanup Campaign
+```powershell
+# Find all inactive accounts with full context
+.\users\users.ps1 -IncludeEntraID -IncludeAD -IncludeLocal -ListUsers `
+    -InactiveDays 90 `
+    -IncludeRiskScore `
+    -IncludePasswordPolicy `
+    -IncludeGroupMembership `
+    -ShowOnlyDisabled:$false `
+    -OutputDirectory "C:\Cleanup\Inactive_$(Get-Date -Format 'yyyy-MM-dd')" `
+    -ExportExcel -ExcelPath "Inactive_Accounts.xlsx" `
+    -IncludeExportFormats
+```
+
+#### MFA Adoption Campaign
+```powershell
+# Find all users without MFA, prioritized by risk
+.\users\users.ps1 -IncludeEntraID -ListUsers `
+    -ShowOnlyNoMFA `
+    -IncludeRiskScore `
+    -IncludePrivilegedAccounts `
+    -IncludeConditionalAccess `
+    -FilterByRiskLevel "Critical" `
+    -OutputDirectory "C:\MFA_Campaign\$(Get-Date -Format 'yyyy-MM-dd')" `
+    -ExportExcel -ExcelPath "NoMFA_Critical.xlsx"
+```
+
+#### Password Policy Enforcement
+```powershell
+# Find all password policy violations
+.\users\users.ps1 -IncludeEntraID -IncludeAD -ListUsers `
+    -IncludePasswordPolicy `
+    -IncludeRiskScore `
+    -ComplianceFramework "PCI-DSS","ISO27001" `
+    -OutputDirectory "C:\PasswordAudit\$(Get-Date -Format 'yyyy-MM-dd')" `
+    -ExportExcel -ExcelPath "Password_Policy_Audit.xlsx"
+```
+
+#### Cached Performance Testing
+```powershell
+# First: Load data and cache it
+.\users\users.ps1 -IncludeEntraID -ListUsers -UseCache -CacheExpiryMinutes 120
+
+# Then: Run multiple queries using cached data (very fast!)
+.\users\users.ps1 -IncludeEntraID -ListUsers -UseCache -FilterByDepartment "Finance" -ExportExcel -ExcelPath "Finance.xlsx"
+.\users\users.ps1 -IncludeEntraID -ListUsers -UseCache -FilterByDepartment "IT" -ExportExcel -ExcelPath "IT.xlsx"
+.\users\users.ps1 -IncludeEntraID -ListUsers -UseCache -ShowOnlyPrivileged -ExportExcel -ExcelPath "Privileged.xlsx"
+.\users\users.ps1 -IncludeEntraID -ListUsers -UseCache -ShowOnlyNoMFA -ExportExcel -ExcelPath "NoMFA.xlsx"
+```
+
+#### Location-Based Audit
+```powershell
+# Audit all users in specific location with full security context
+.\users\users.ps1 -IncludeEntraID -ListUsers `
+    -FilterByLocation "London" `
+    -IncludeRiskScore `
+    -IncludeDeviceCompliance `
+    -IncludeConditionalAccess `
+    -ComplianceFramework "GDPR","ISO27001" `
+    -OutputDirectory "C:\Reports\Locations\London\$(Get-Date -Format 'yyyy-MM')" `
+    -ExportExcel -ExcelPath "London_Office_Audit.xlsx" `
+    -IncludeExportFormats
+```
+
+#### Date-Range Activity Report
+```powershell
+# Users who logged in during Q1 2025
+.\users\users.ps1 -IncludeEntraID -IncludeAD -ListUsers `
+    -LastLoginAfter "2025-01-01" `
+    -LastLoginBefore "2025-03-31" `
+    -IncludeRiskScore `
+    -OutputDirectory "C:\Reports\Activity\2025-Q1" `
+    -ExportExcel -ExcelPath "Q1_Activity.xlsx"
+```
+
+#### Minimal Quick Check
+```powershell
+# Quick overview with minimal columns (fast!)
+.\users\users.ps1 -IncludeEntraID -ListUsers `
+    -Minimal `
+    -MaxRecords 100 `
+    -OutGridView
+```
+
+#### GUI Interactive Analysis
+```powershell
+# Open in GUI for interactive filtering
+.\users\users.ps1 -IncludeEntraID -ListUsers `
+    -IncludeRiskScore `
+    -IncludePrivilegedAccounts `
+    -IncludePasswordPolicy `
+    -IncludeGroupMembership `
+    -OutGridView
+```
+
+---
+
 ## 🔧 Troubleshooting
 
 ### Issue: "PowerShell version is too old"
@@ -1195,7 +1742,7 @@ Get-Help .\users\users.ps1 -Parameter *
 
 ## 📝 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU GENERAL PUBLIC LICENSE Version 3 - see the [LICENSE](LICENSE) file for details.
 
 ---
 
