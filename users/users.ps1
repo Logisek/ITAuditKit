@@ -1,3 +1,5 @@
+#Requires -Version 7.0
+
 <#
 .SYNOPSIS
     Retrieves user login timestamps from local computer, Active Directory, and/or Entra ID.
@@ -64,14 +66,45 @@
     .\users.ps1 -IncludeEntraID -ListUsers -Verbose
     Lists Entra ID users with verbose output showing detailed processing information
 
+.EXAMPLE
+    .\users.ps1 -IncludeEntraID -ListUsers -FilterByDepartment "IT" -ShowOnlyNoMFA
+    Lists IT department users who don't have MFA enabled
+
+.EXAMPLE
+    .\users.ps1 -IncludeEntraID -ListUsers -FilterByRiskLevel "Critical" -ShowOnlyPrivileged
+    Lists critical risk privileged accounts
+
+.EXAMPLE
+    .\users.ps1 -IncludeEntraID -ListUsers -InactiveDays 90
+    Lists all users who haven't logged in for 90+ days
+
+.EXAMPLE
+    .\users.ps1 -IncludeEntraID -ListUsers -UseCache -CacheExpiryMinutes 30
+    Uses cached data if available and less than 30 minutes old
+
+.EXAMPLE
+    .\users.ps1 -IncludeEntraID -ListUsers -ComplianceFramework "SOX","HIPAA"
+    Generates SOX and HIPAA compliance reports
+
+.EXAMPLE
+    .\users.ps1 -IncludeEntraID -ListUsers -ComplianceFramework "All"
+    Generates compliance reports for all frameworks (SOX, HIPAA, GDPR, PCI-DSS, ISO27001, NIST, CIS)
+
 .NOTES
     Author: IT Audit Kit
-    Version: 3.9
+    Version: 4.0
+    
+    IMPORTANT: This script requires PowerShell 7.0 or higher!
+    
     Requires: 
+        - PowerShell 7.0+ (Install: winget install Microsoft.PowerShell)
         - Administrator privileges to read local Security event log
         - ActiveDirectory PowerShell module for AD logs
         - Microsoft.Graph PowerShell modules for Entra ID logs (Users, Reports, Authentication)
         - UserAuthenticationMethod.Read.All and Device.Read.All permissions for Entra ID
+    
+    To run with PowerShell 7:
+        pwsh -File .\users.ps1 -Profile Quick
 #>
 
 [CmdletBinding()]
@@ -116,6 +149,9 @@ param(
     [Parameter(Mandatory=$false, HelpMessage="Worksheet name for Excel export (default: Users or Logins)")]
     [string]$ExcelWorksheet,
     
+    [Parameter(Mandatory=$false, HelpMessage="Output directory for all exported files (default: current directory)")]
+    [string]$OutputDirectory = ".",
+    
     [Parameter(Mandatory=$false, HelpMessage="Include security risk scoring for users")]
     [switch]$IncludeRiskScore,
     
@@ -153,14 +189,1328 @@ param(
     [switch]$IncludeExportFormats,
     
     [Parameter(Mandatory=$false, HelpMessage="Display help information")]
-    [switch]$Help
+    [switch]$Help,
+    
+    [Parameter(Mandatory=$false, HelpMessage="Configuration file path (JSON format)")]
+    [string]$ConfigFile,
+    
+    [Parameter(Mandatory=$false, HelpMessage="Use predefined security audit profile")]
+    [ValidateSet("Quick", "Standard", "Comprehensive", "Executive", "Compliance")]
+    [string]$Profile,
+    
+    # Advanced Filtering Parameters
+    [Parameter(Mandatory=$false, HelpMessage="Filter users by department")]
+    [string]$FilterByDepartment,
+    
+    [Parameter(Mandatory=$false, HelpMessage="Filter users by office location")]
+    [string]$FilterByLocation,
+    
+    [Parameter(Mandatory=$false, HelpMessage="Filter users by job title")]
+    [string]$FilterByJobTitle,
+    
+    [Parameter(Mandatory=$false, HelpMessage="Filter users who logged in after this date")]
+    [datetime]$LastLoginAfter,
+    
+    [Parameter(Mandatory=$false, HelpMessage="Filter users who logged in before this date")]
+    [datetime]$LastLoginBefore,
+    
+    [Parameter(Mandatory=$false, HelpMessage="Filter by risk level (Critical, High, Medium, Low, Minimal)")]
+    [ValidateSet("Critical", "High", "Medium", "Low", "Minimal")]
+    [string]$FilterByRiskLevel,
+    
+    [Parameter(Mandatory=$false, HelpMessage="Show only users without MFA")]
+    [switch]$ShowOnlyNoMFA,
+    
+    [Parameter(Mandatory=$false, HelpMessage="Show only privileged accounts")]
+    [switch]$ShowOnlyPrivileged,
+    
+    [Parameter(Mandatory=$false, HelpMessage="Show only disabled accounts")]
+    [switch]$ShowOnlyDisabled,
+    
+    [Parameter(Mandatory=$false, HelpMessage="Show only guest users")]
+    [switch]$ShowOnlyGuests,
+    
+    [Parameter(Mandatory=$false, HelpMessage="Show only inactive accounts (no login in X days)")]
+    [int]$InactiveDays,
+    
+    # Caching Parameters
+    [Parameter(Mandatory=$false, HelpMessage="Use cached data if available")]
+    [switch]$UseCache,
+    
+    [Parameter(Mandatory=$false, HelpMessage="Cache expiry time in minutes (default: 60)")]
+    [int]$CacheExpiryMinutes = 60,
+    
+    [Parameter(Mandatory=$false, HelpMessage="Clear cache before running")]
+    [switch]$ClearCache,
+    
+    # Compliance Reporting Parameters
+    [Parameter(Mandatory=$false, HelpMessage="Generate compliance report for specific framework")]
+    [ValidateSet("SOX", "HIPAA", "GDPR", "PCI-DSS", "ISO27001", "NIST", "CIS", "All")]
+    [string[]]$ComplianceFramework
 )
+
+#region PowerShell Version Check
+# Check PowerShell version before executing
+$psVersion = $PSVersionTable.PSVersion
+
+if ($psVersion.Major -lt 7) {
+    Write-Host "`n" + "="*70 -ForegroundColor Red
+    Write-Host "UNSUPPORTED POWERSHELL VERSION" -ForegroundColor Red
+    Write-Host "="*70 -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Current Version: PowerShell $($psVersion.Major).$($psVersion.Minor)" -ForegroundColor Yellow
+    Write-Host "Required Version: PowerShell 7.0 or higher" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "This script requires PowerShell 7+ due to:" -ForegroundColor White
+    Write-Host "  - Modern parsing features" -ForegroundColor Gray
+    Write-Host "  - Improved error handling" -ForegroundColor Gray
+    Write-Host "  - Better string processing" -ForegroundColor Gray
+    Write-Host "  - Enhanced module support" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "HOW TO FIX:" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Option 1: Install PowerShell 7 (Recommended)" -ForegroundColor Yellow
+    Write-Host "  winget install Microsoft.PowerShell" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Option 2: Download from GitHub" -ForegroundColor Yellow
+    Write-Host "  https://github.com/PowerShell/PowerShell/releases" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Option 3: Use Chocolatey" -ForegroundColor Yellow
+    Write-Host "  choco install powershell-core" -ForegroundColor White
+    Write-Host ""
+    Write-Host "After installing, run this script with PowerShell 7:" -ForegroundColor Cyan
+    Write-Host "  pwsh -File $($MyInvocation.MyCommand.Path) $($MyInvocation.Line -replace '.*\\users\.ps1\s*','')" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Or launch PowerShell 7 and run:" -ForegroundColor Cyan
+    Write-Host "  pwsh" -ForegroundColor White
+    Write-Host "  cd $(Split-Path $MyInvocation.MyCommand.Path)" -ForegroundColor White
+    Write-Host "  .\users.ps1 $($args -join ' ')" -ForegroundColor White
+    Write-Host ""
+    Write-Host "="*70 -ForegroundColor Red
+    Write-Host ""
+    
+    # Exit with error code
+    exit 1
+}
+
+Write-Verbose "PowerShell version check passed: $($psVersion.Major).$($psVersion.Minor).$($psVersion.Build)"
+#endregion
+
+#region Output Directory Validation
+# Ensure output directory exists and is accessible
+if ($OutputDirectory) {
+    try {
+        # Resolve to absolute path if it exists
+        $resolvedPath = Resolve-Path -Path $OutputDirectory -ErrorAction SilentlyContinue
+        
+        # If path doesn't exist, try to create it
+        if (-not $resolvedPath) {
+            $OutputDirectory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
+            if (-not (Test-Path -Path $OutputDirectory)) {
+                Write-Host "Creating output directory: $OutputDirectory" -ForegroundColor Cyan
+                New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+                $resolvedPath = Resolve-Path -Path $OutputDirectory
+            }
+        }
+        
+        # Convert to string if it's a PathInfo object
+        if ($resolvedPath) {
+            $OutputDirectory = $resolvedPath.Path
+        }
+        
+        # Test write access
+        $testFile = Join-Path $OutputDirectory ".test_write_$(Get-Random).tmp"
+        try {
+            New-Item -ItemType File -Path $testFile -Force | Out-Null
+            Remove-Item -Path $testFile -Force -ErrorAction SilentlyContinue
+            Write-Verbose "Output directory validated: $OutputDirectory"
+        } catch {
+            Write-Host "`nWARNING: " -ForegroundColor Yellow -NoNewline
+            Write-Host "Cannot write to output directory: $OutputDirectory"
+            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "Falling back to current directory." -ForegroundColor Yellow
+            $OutputDirectory = "."
+        }
+        
+    } catch {
+        Write-Host "`nWARNING: " -ForegroundColor Yellow -NoNewline
+        Write-Host "Invalid output directory: $OutputDirectory"
+        Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Falling back to current directory." -ForegroundColor Yellow
+        $OutputDirectory = "."
+    }
+}
+
+# Ensure OutputDirectory has no trailing slash for consistent path joins
+$OutputDirectory = $OutputDirectory.TrimEnd('\', '/')
+#endregion
 
 # Function to check if running as administrator
 function Test-Administrator {
     $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+# Function to show progress with timing
+function Show-ProgressWithTiming {
+    param(
+        [string]$Activity,
+        [string]$Status,
+        [int]$Current,
+        [int]$Total,
+        [string]$CurrentItem = ""
+    )
+    
+    if ($Total -gt 0) {
+        $percentComplete = [Math]::Min(100, [Math]::Max(0, ($Current / $Total) * 100))
+        $statusText = if ($CurrentItem) { "$Status - $CurrentItem" } else { $Status }
+        
+        Write-Progress -Activity $Activity -Status $statusText -PercentComplete $percentComplete -CurrentOperation "Processing item $Current of $Total"
+    }
+}
+
+# Function to measure and display execution time
+function Measure-ExecutionTime {
+    param(
+        [scriptblock]$ScriptBlock,
+        [string]$OperationName = "Operation"
+    )
+    
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $result = & $ScriptBlock
+        $stopwatch.Stop()
+        Write-Host "✓ $OperationName completed in $($stopwatch.Elapsed.TotalSeconds.ToString('F2')) seconds" -ForegroundColor Green
+        return $result
+    } catch {
+        $stopwatch.Stop()
+        Write-Host "✗ $OperationName failed after $($stopwatch.Elapsed.TotalSeconds.ToString('F2')) seconds" -ForegroundColor Red
+        throw
+    }
+}
+
+# Function to show operation status
+function Write-OperationStatus {
+    param(
+        [string]$Message,
+        [ValidateSet("Info", "Success", "Warning", "Error")]
+        [string]$Type = "Info"
+    )
+    
+    $timestamp = Get-Date -Format "HH:mm:ss"
+    $prefix = switch ($Type) {
+        "Info" { "[i]" }
+        "Success" { "[+]" }
+        "Warning" { "[!]" }
+        "Error" { "[x]" }
+    }
+    
+    $color = switch ($Type) {
+        "Info" { "Cyan" }
+        "Success" { "Green" }
+        "Warning" { "Yellow" }
+        "Error" { "Red" }
+    }
+    
+    Write-Host "[$timestamp] $prefix $Message" -ForegroundColor $color
+}
+
+# Function to generate security audit summary
+function Show-SecuritySummary {
+    param(
+        [array]$UserData,
+        [array]$LoginData = @()
+    )
+    
+    if (-not $UserData -or $UserData.Count -eq 0) {
+        Write-OperationStatus "No user data available for summary" "Warning"
+        return
+    }
+    
+    Write-Host "`n" + "="*60 -ForegroundColor Cyan
+    Write-Host "SECURITY AUDIT SUMMARY" -ForegroundColor Cyan
+    Write-Host "="*60 -ForegroundColor Cyan
+    
+    # Basic Statistics
+    $totalUsers = $UserData.Count
+    $enabledUsers = ($UserData | Where-Object { $_.Status -eq "Enabled" -or $_.Enabled -eq $true }).Count
+    $disabledUsers = $totalUsers - $enabledUsers
+    
+    Write-Host "`n[USER OVERVIEW]" -ForegroundColor Yellow
+    Write-Host "  Total Users Analyzed: $totalUsers" -ForegroundColor White
+    Write-Host "  Enabled Users: $enabledUsers" -ForegroundColor Green
+    Write-Host "  Disabled Users: $disabledUsers" -ForegroundColor Red
+    
+    # MFA Statistics
+    $usersWithMFA = ($UserData | Where-Object { $_.MFAStatus -and $_.MFAStatus -ne "No Methods Registered" -and $_.MFAStatus -ne "Unknown" }).Count
+    $usersWithoutMFA = $totalUsers - $usersWithMFA
+    $mfaPercentage = if ($totalUsers -gt 0) { [Math]::Round(($usersWithMFA / $totalUsers) * 100, 1) } else { 0 }
+    
+    Write-Host "`n[MFA STATUS]" -ForegroundColor Yellow
+    Write-Host "  Users with MFA: $usersWithMFA - $mfaPercentage percent" -ForegroundColor Green
+    Write-Host "  Users without MFA: $usersWithoutMFA" -ForegroundColor Red
+    
+    # Risk Analysis
+    if ($UserData[0].PSObject.Properties.Name -contains 'RiskLevel') {
+        $criticalRisk = ($UserData | Where-Object { $_.RiskLevel -eq "Critical" }).Count
+        $highRisk = ($UserData | Where-Object { $_.RiskLevel -eq "High" }).Count
+        $mediumRisk = ($UserData | Where-Object { $_.RiskLevel -eq "Medium" }).Count
+        $lowRisk = ($UserData | Where-Object { $_.RiskLevel -eq "Low" }).Count
+        $minimalRisk = ($UserData | Where-Object { $_.RiskLevel -eq "Minimal" }).Count
+        
+        Write-Host "`n[RISK ANALYSIS]" -ForegroundColor Yellow
+        Write-Host "  Critical Risk: $criticalRisk" -ForegroundColor Red
+        Write-Host "  High Risk: $highRisk" -ForegroundColor DarkRed
+        Write-Host "  Medium Risk: $mediumRisk" -ForegroundColor Yellow
+        Write-Host "  Low Risk: $lowRisk" -ForegroundColor Green
+        Write-Host "  Minimal Risk: $minimalRisk" -ForegroundColor DarkGreen
+    }
+    
+    # Privileged Accounts
+    if ($UserData[0].PSObject.Properties.Name -contains 'IsPrivileged') {
+        $privilegedUsers = ($UserData | Where-Object { $_.IsPrivileged -eq $true }).Count
+        $privilegedWithoutMFA = ($UserData | Where-Object { $_.IsPrivileged -eq $true -and ($_.MFAStatus -eq "No Methods Registered" -or $_.MFAStatus -eq "Unknown") }).Count
+        
+        Write-Host "`n[PRIVILEGED ACCOUNTS]" -ForegroundColor Yellow
+        Write-Host "  Total Privileged: $privilegedUsers" -ForegroundColor White
+        Write-Host "  Privileged without MFA: $privilegedWithoutMFA" -ForegroundColor Red
+    }
+    
+    # Service Accounts
+    if ($UserData[0].PSObject.Properties.Name -contains 'IsServiceAccount') {
+        $serviceAccounts = ($UserData | Where-Object { $_.IsServiceAccount -eq $true }).Count
+        $serviceWithoutMFA = ($UserData | Where-Object { $_.IsServiceAccount -eq $true -and ($_.MFAStatus -eq "No Methods Registered" -or $_.MFAStatus -eq "Unknown") }).Count
+        
+        Write-Host "`n[SERVICE ACCOUNTS]" -ForegroundColor Yellow
+        Write-Host "  Total Service Accounts: $serviceAccounts" -ForegroundColor White
+        Write-Host "  Service Accounts without MFA: $serviceWithoutMFA" -ForegroundColor Red
+    }
+    
+    # Guest Users
+    if ($UserData[0].PSObject.Properties.Name -contains 'IsGuestUser') {
+        $guestUsers = ($UserData | Where-Object { $_.IsGuestUser -eq $true }).Count
+        $guestWithoutMFA = ($UserData | Where-Object { $_.IsGuestUser -eq $true -and ($_.MFAStatus -eq "No Methods Registered" -or $_.MFAStatus -eq "Unknown") }).Count
+        
+        Write-Host "`n[GUEST USERS]" -ForegroundColor Yellow
+        Write-Host "  Total Guest Users: $guestUsers" -ForegroundColor White
+        Write-Host "  Guest Users without MFA: $guestWithoutMFA" -ForegroundColor Red
+    }
+    
+    # Password Policy Compliance
+    if ($UserData[0].PSObject.Properties.Name -contains 'PasswordPolicyLevel') {
+        $compliantPasswords = ($UserData | Where-Object { $_.PasswordPolicyLevel -eq "Compliant" }).Count
+        $nonCompliantPasswords = ($UserData | Where-Object { $null -ne $_.PasswordPolicyLevel -and $_.PasswordPolicyLevel -ne "Compliant" }).Count
+        
+        Write-Host "`n[PASSWORD COMPLIANCE]" -ForegroundColor Yellow
+        Write-Host "  Compliant Passwords: $compliantPasswords" -ForegroundColor Green
+        Write-Host "  Non-Compliant Passwords: $nonCompliantPasswords" -ForegroundColor Red
+    }
+    
+    # Login Activity
+    if ($LoginData -and $LoginData.Count -gt 0) {
+        $recentLogins = ($LoginData | Where-Object { $_.TimeStamp -gt (Get-Date).AddDays(-30) }).Count
+        $neverLoggedIn = ($UserData | Where-Object { $_.TimeStamp -eq [DateTime]::MinValue }).Count
+        
+        Write-Host "`n[LOGIN ACTIVITY] (Last 30 days)" -ForegroundColor Yellow
+        Write-Host "  Recent Logins: $recentLogins" -ForegroundColor Green
+        Write-Host "  Never Logged In: $neverLoggedIn" -ForegroundColor Red
+    }
+    
+    # Security Recommendations
+    Write-Host "`n[SECURITY RECOMMENDATIONS]" -ForegroundColor Yellow
+    if ($usersWithoutMFA -gt 0) {
+        Write-Host "  • Enable MFA for $usersWithoutMFA users without MFA" -ForegroundColor Red
+    }
+    if ($privilegedWithoutMFA -gt 0) {
+        Write-Host "  • CRITICAL: Enable MFA for $privilegedWithoutMFA privileged accounts" -ForegroundColor Red
+    }
+    if ($serviceWithoutMFA -gt 0) {
+        Write-Host "  • Review MFA requirements for $serviceWithoutMFA service accounts" -ForegroundColor Yellow
+    }
+    if ($guestWithoutMFA -gt 0) {
+        Write-Host "  • Enable MFA for $guestWithoutMFA guest users" -ForegroundColor Yellow
+    }
+    if ($nonCompliantPasswords -gt 0) {
+        Write-Host "  • Address password policy violations for $nonCompliantPasswords users" -ForegroundColor Yellow
+    }
+    if ($neverLoggedIn -gt 0) {
+        Write-Host "  • Review $neverLoggedIn accounts that have never logged in" -ForegroundColor Yellow
+    }
+    
+    Write-Host "`n" + "="*60 -ForegroundColor Cyan
+}
+
+# Function to invoke operations with retry logic
+function Invoke-WithRetry {
+    param(
+        [scriptblock]$ScriptBlock,
+        [int]$MaxRetries = 3,
+        [int]$DelaySeconds = 2,
+        [string]$OperationName = "Operation"
+    )
+    
+    $attempt = 1
+    $lastException = $null
+    
+    while ($attempt -le $MaxRetries) {
+        try {
+            Write-OperationStatus "Attempting $OperationName (Attempt $attempt of $MaxRetries)" "Info"
+            $result = & $ScriptBlock
+            Write-OperationStatus "$OperationName completed successfully" "Success"
+            return $result
+        } catch {
+            $lastException = $_
+            Write-OperationStatus "$OperationName failed on attempt $attempt`: $($_.Exception.Message)" "Warning"
+            
+            if ($attempt -lt $MaxRetries) {
+                $delay = $DelaySeconds * [Math]::Pow(2, $attempt - 1) # Exponential backoff
+                Write-OperationStatus "Retrying in $delay seconds..." "Info"
+                Start-Sleep -Seconds $delay
+            }
+            $attempt++
+        }
+    }
+    
+    Write-OperationStatus "$OperationName failed after $MaxRetries attempts" "Error"
+    throw $lastException
+}
+
+# Function to handle API throttling
+function Invoke-WithThrottling {
+    param(
+        [scriptblock]$ScriptBlock,
+        [string]$OperationName = "API Operation"
+    )
+    
+    try {
+        return & $ScriptBlock
+    } catch {
+        if ($_.Exception.Message -like "*throttled*" -or $_.Exception.Message -like "*429*" -or $_.Exception.Message -like "*rate limit*") {
+            Write-OperationStatus "API rate limit reached for $OperationName. Waiting 60 seconds..." "Warning"
+            Start-Sleep -Seconds 60
+            Write-OperationStatus "Retrying $OperationName after rate limit delay" "Info"
+            return & $ScriptBlock
+        } else {
+            throw
+        }
+    }
+}
+
+# Function to validate prerequisites
+function Test-Prerequisites {
+    param(
+        [string[]]$RequiredModules = @(),
+        [string[]]$RequiredCommands = @()
+    )
+    
+    $missingItems = @()
+    
+    # Check required modules
+    foreach ($module in $RequiredModules) {
+        if (-not (Get-Module -ListAvailable -Name $module)) {
+            $missingItems += "Module: $module"
+        }
+    }
+    
+    # Check required commands
+    foreach ($command in $RequiredCommands) {
+        if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
+            $missingItems += "Command: $command"
+        }
+    }
+    
+    if ($missingItems.Count -gt 0) {
+        Write-OperationStatus "Missing prerequisites:" "Error"
+        foreach ($item in $missingItems) {
+            Write-Host "  • $item" -ForegroundColor Red
+        }
+        return $false
+    }
+    
+    return $true
+}
+
+#region Advanced Filtering Functions
+# Function to apply advanced filters to user data
+function Invoke-AdvancedFilters {
+    param(
+        [array]$UserData,
+        [string]$Department,
+        [string]$Location,
+        [string]$JobTitle,
+        [AllowNull()]
+        [datetime]$LoginAfter,
+        [AllowNull()]
+        [datetime]$LoginBefore,
+        [string]$RiskLevel,
+        [switch]$OnlyNoMFA,
+        [switch]$OnlyPrivileged,
+        [switch]$OnlyDisabled,
+        [switch]$OnlyGuests,
+        [int]$InactiveDays
+    )
+    
+    Write-OperationStatus "Applying advanced filters..." "Info"
+    $filteredData = $UserData
+    $filtersApplied = @()
+    
+    # Filter by department
+    if ($Department) {
+        $filteredData = $filteredData | Where-Object { 
+            $_.Department -like "*$Department*" -or 
+            $_.DisplayName -like "*$Department*"
+        }
+        $filtersApplied += "Department: $Department"
+    }
+    
+    # Filter by location
+    if ($Location) {
+        $filteredData = $filteredData | Where-Object { 
+            $_.Location -like "*$Location*" -or 
+            $_.OfficeLocation -like "*$Location*"
+        }
+        $filtersApplied += "Location: $Location"
+    }
+    
+    # Filter by job title
+    if ($JobTitle) {
+        $filteredData = $filteredData | Where-Object { 
+            $_.JobTitle -like "*$JobTitle*"
+        }
+        $filtersApplied += "Job Title: $JobTitle"
+    }
+    
+    # Filter by last login after date
+    if ($LoginAfter -and $LoginAfter -ne [DateTime]::MinValue) {
+        $filteredData = $filteredData | Where-Object { 
+            $_.TimeStamp -and $_.TimeStamp -ne [DateTime]::MinValue -and $_.TimeStamp -gt $LoginAfter
+        }
+        $filtersApplied += "Login After: $($LoginAfter.ToString('yyyy-MM-dd'))"
+    }
+    
+    # Filter by last login before date
+    if ($LoginBefore -and $LoginBefore -ne [DateTime]::MinValue) {
+        $filteredData = $filteredData | Where-Object { 
+            $_.TimeStamp -and $_.TimeStamp -ne [DateTime]::MinValue -and $_.TimeStamp -lt $LoginBefore
+        }
+        $filtersApplied += "Login Before: $($LoginBefore.ToString('yyyy-MM-dd'))"
+    }
+    
+    # Filter by risk level
+    if ($RiskLevel) {
+        $filteredData = $filteredData | Where-Object { 
+            $_.RiskLevel -eq $RiskLevel
+        }
+        $filtersApplied += "Risk Level: $RiskLevel"
+    }
+    
+    # Filter for users without MFA
+    if ($OnlyNoMFA) {
+        $filteredData = $filteredData | Where-Object { 
+            $_.MFAStatus -eq "No Methods Registered" -or 
+            $_.MFAStatus -eq "Unknown" -or 
+            -not $_.MFAStatus
+        }
+        $filtersApplied += "Only No MFA"
+    }
+    
+    # Filter for privileged accounts
+    if ($OnlyPrivileged) {
+        $filteredData = $filteredData | Where-Object { 
+            $_.IsPrivileged -eq $true -or 
+            $_.UserRights -like "*Admin*" -or 
+            $_.Roles -like "*Admin*"
+        }
+        $filtersApplied += "Only Privileged"
+    }
+    
+    # Filter for disabled accounts
+    if ($OnlyDisabled) {
+        $filteredData = $filteredData | Where-Object { 
+            $_.Status -eq "Disabled" -or 
+            $_.Enabled -eq $false
+        }
+        $filtersApplied += "Only Disabled"
+    }
+    
+    # Filter for guest users
+    if ($OnlyGuests) {
+        $filteredData = $filteredData | Where-Object { 
+            $_.IsGuestUser -eq $true -or 
+            $_.UserName -like "*#EXT#*"
+        }
+        $filtersApplied += "Only Guests"
+    }
+    
+    # Filter for inactive accounts
+    if ($InactiveDays -gt 0) {
+        $inactiveDate = (Get-Date).AddDays(-$InactiveDays)
+        $filteredData = $filteredData | Where-Object { 
+            $_.TimeStamp -eq [DateTime]::MinValue -or 
+            ($_.TimeStamp -and $_.TimeStamp -lt $inactiveDate)
+        }
+        $filtersApplied += "Inactive: $InactiveDays days+"
+    }
+    
+    if ($filtersApplied.Count -gt 0) {
+        Write-OperationStatus "Filters applied: $($filtersApplied -join ', ')" "Success"
+        Write-OperationStatus "Filtered from $($UserData.Count) to $($filteredData.Count) users" "Success"
+    } else {
+        Write-OperationStatus "No filters applied" "Info"
+    }
+    
+    return $filteredData
+}
+#endregion
+
+#region Caching Functions
+# Function to get cache file path
+function Get-CacheFilePath {
+    param(
+        [string]$CacheKey
+    )
+    
+    $cacheDir = Join-Path $env:TEMP "ITAuditKit_Cache"
+    if (-not (Test-Path $cacheDir)) {
+        New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
+    }
+    
+    $sanitizedKey = $CacheKey -replace '[\\/:*?"<>|]', '_'
+    return Join-Path $cacheDir "$sanitizedKey.cache.json"
+}
+
+# Function to save data to cache
+function Save-ToCache {
+    param(
+        [string]$CacheKey,
+        [object]$Data
+    )
+    
+    try {
+        $cachePath = Get-CacheFilePath -CacheKey $CacheKey
+        $cacheObject = @{
+            Timestamp = Get-Date
+            Data = $Data
+        }
+        
+        $cacheObject | ConvertTo-Json -Depth 100 | Out-File -FilePath $cachePath -Encoding UTF8
+        Write-OperationStatus "Data cached to: $cachePath" "Success"
+        return $true
+    } catch {
+        Write-OperationStatus "Failed to cache data: $($_.Exception.Message)" "Warning"
+        return $false
+    }
+}
+
+# Function to load data from cache
+function Get-FromCache {
+    param(
+        [string]$CacheKey,
+        [int]$ExpiryMinutes = 60
+    )
+    
+    try {
+        $cachePath = Get-CacheFilePath -CacheKey $CacheKey
+        
+        if (-not (Test-Path $cachePath)) {
+            Write-OperationStatus "Cache not found for key: $CacheKey" "Info"
+            return $null
+        }
+        
+        $cacheObject = Get-Content $cachePath -Raw | ConvertFrom-Json
+        $cacheAge = (Get-Date) - [DateTime]$cacheObject.Timestamp
+        
+        if ($cacheAge.TotalMinutes -gt $ExpiryMinutes) {
+            Write-OperationStatus "Cache expired (age: $([Math]::Round($cacheAge.TotalMinutes, 1)) minutes)" "Warning"
+            return $null
+        }
+        
+        Write-OperationStatus "Cache hit! (age: $([Math]::Round($cacheAge.TotalMinutes, 1)) minutes)" "Success"
+        return $cacheObject.Data
+    } catch {
+        Write-OperationStatus "Failed to load cache: $($_.Exception.Message)" "Warning"
+        return $null
+    }
+}
+
+# Function to clear cache
+function Clear-AuditCache {
+    param(
+        [string]$CacheKey
+    )
+    
+    try {
+        if ($CacheKey) {
+            $cachePath = Get-CacheFilePath -CacheKey $CacheKey
+            if (Test-Path $cachePath) {
+                Remove-Item $cachePath -Force
+                Write-OperationStatus "Cache cleared for key: $CacheKey" "Success"
+            }
+        } else {
+            $cacheDir = Join-Path $env:TEMP "ITAuditKit_Cache"
+            if (Test-Path $cacheDir) {
+                Get-ChildItem $cacheDir -Filter "*.cache.json" | Remove-Item -Force
+                Write-OperationStatus "All cache files cleared" "Success"
+            }
+        }
+        return $true
+    } catch {
+        Write-OperationStatus "Failed to clear cache: $($_.Exception.Message)" "Error"
+        return $false
+    }
+}
+#endregion
+
+#region Compliance Reporting Functions
+# Function to generate structured compliance data
+function Get-ComplianceData {
+    param(
+        [array]$UserData,
+        [string[]]$Frameworks
+    )
+    
+    if (-not $UserData -or $UserData.Count -eq 0) {
+        return @()
+    }
+    
+    $complianceData = @()
+    
+    foreach ($framework in $Frameworks) {
+        $frameworkData = switch ($framework) {
+            "SOX" { Get-ComplianceData-SOX -UserData $UserData }
+            "HIPAA" { Get-ComplianceData-HIPAA -UserData $UserData }
+            "GDPR" { Get-ComplianceData-GDPR -UserData $UserData }
+            "PCI-DSS" { Get-ComplianceData-PCIDSS -UserData $UserData }
+            "ISO27001" { Get-ComplianceData-ISO27001 -UserData $UserData }
+            "NIST" { Get-ComplianceData-NIST -UserData $UserData }
+            "CIS" { Get-ComplianceData-CIS -UserData $UserData }
+            "All" {
+                $allData = @()
+                $allData += Get-ComplianceData-SOX -UserData $UserData
+                $allData += Get-ComplianceData-HIPAA -UserData $UserData
+                $allData += Get-ComplianceData-GDPR -UserData $UserData
+                $allData += Get-ComplianceData-PCIDSS -UserData $UserData
+                $allData += Get-ComplianceData-ISO27001 -UserData $UserData
+                $allData += Get-ComplianceData-NIST -UserData $UserData
+                $allData += Get-ComplianceData-CIS -UserData $UserData
+                $allData
+            }
+        }
+        
+        if ($framework -ne "All") {
+            $complianceData += $frameworkData
+        } else {
+            $complianceData = $frameworkData
+        }
+    }
+    
+    return $complianceData
+}
+
+# Function to generate compliance report
+function New-ComplianceReport {
+    param(
+        [array]$UserData,
+        [string[]]$Frameworks
+    )
+    
+    if (-not $UserData -or $UserData.Count -eq 0) {
+        Write-OperationStatus "No user data available for compliance report" "Warning"
+        return
+    }
+    
+    foreach ($framework in $Frameworks) {
+        Write-Host "`n" + "="*80 -ForegroundColor Cyan
+        Write-Host "COMPLIANCE REPORT: $framework" -ForegroundColor Cyan
+        Write-Host "="*80 -ForegroundColor Cyan
+        Write-Host "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Gray
+        Write-Host "Total Users Analyzed: $($UserData.Count)" -ForegroundColor Gray
+        Write-Host ""
+        
+        switch ($framework) {
+            "SOX" {
+                Write-ComplianceReport-SOX -UserData $UserData
+            }
+            "HIPAA" {
+                Write-ComplianceReport-HIPAA -UserData $UserData
+            }
+            "GDPR" {
+                Write-ComplianceReport-GDPR -UserData $UserData
+            }
+            "PCI-DSS" {
+                Write-ComplianceReport-PCIDSS -UserData $UserData
+            }
+            "ISO27001" {
+                Write-ComplianceReport-ISO27001 -UserData $UserData
+            }
+            "NIST" {
+                Write-ComplianceReport-NIST -UserData $UserData
+            }
+            "CIS" {
+                Write-ComplianceReport-CIS -UserData $UserData
+            }
+            "All" {
+                Write-ComplianceReport-SOX -UserData $UserData
+                Write-Host "`n" + "-"*80 -ForegroundColor Gray
+                Write-ComplianceReport-HIPAA -UserData $UserData
+                Write-Host "`n" + "-"*80 -ForegroundColor Gray
+                Write-ComplianceReport-GDPR -UserData $UserData
+                Write-Host "`n" + "-"*80 -ForegroundColor Gray
+                Write-ComplianceReport-PCIDSS -UserData $UserData
+                Write-Host "`n" + "-"*80 -ForegroundColor Gray
+                Write-ComplianceReport-ISO27001 -UserData $UserData
+                Write-Host "`n" + "-"*80 -ForegroundColor Gray
+                Write-ComplianceReport-NIST -UserData $UserData
+                Write-Host "`n" + "-"*80 -ForegroundColor Gray
+                Write-ComplianceReport-CIS -UserData $UserData
+            }
+        }
+        
+        Write-Host "`n" + "="*80 -ForegroundColor Cyan
+    }
+}
+
+# Get SOX Compliance Data
+function Get-ComplianceData-SOX {
+    param([array]$UserData)
+    
+    $privilegedUsers = ($UserData | Where-Object { $_.IsPrivileged -eq $true }).Count
+    $privilegedNoMFA = ($UserData | Where-Object { $_.IsPrivileged -eq $true -and ($_.MFAStatus -eq "No Methods Registered" -or $_.MFAStatus -eq "Unknown") }).Count
+    $adminAccounts = ($UserData | Where-Object { $_.UserRights -like "*Admin*" }).Count
+    $sharedAccounts = ($UserData | Where-Object { $_.UserName -like "*shared*" -or $_.UserName -like "*admin*" -or $_.UserName -like "*service*" }).Count
+    $inactivePrivileged = ($UserData | Where-Object { $_.IsPrivileged -eq $true -and ($_.TimeStamp -eq [DateTime]::MinValue -or $_.TimeStamp -lt (Get-Date).AddDays(-90)) }).Count
+    
+    $soxCompliance = if ($privilegedNoMFA -eq 0 -and $inactivePrivileged -eq 0) { "PASS" } else { "FAIL" }
+    
+    return [PSCustomObject]@{
+        Framework = "SOX"
+        FrameworkName = "Sarbanes-Oxley Act"
+        Focus = "Financial data integrity, access controls, segregation of duties"
+        TotalUsers = $UserData.Count
+        PrivilegedAccounts = $privilegedUsers
+        AdminAccounts = $adminAccounts
+        PrivilegedNoMFA = $privilegedNoMFA
+        PrivilegedNoMFAStatus = if ($privilegedNoMFA -eq 0) { "COMPLIANT" } else { "NON-COMPLIANT" }
+        SharedAccounts = $sharedAccounts
+        SharedAccountsStatus = if ($sharedAccounts -eq 0) { "COMPLIANT" } else { "REVIEW REQUIRED" }
+        InactivePrivileged = $inactivePrivileged
+        InactivePrivilegedStatus = if ($inactivePrivileged -eq 0) { "COMPLIANT" } else { "ACTION REQUIRED" }
+        OverallStatus = $soxCompliance
+        Timestamp = Get-Date
+    }
+}
+
+# SOX Compliance Report
+function Write-ComplianceReport-SOX {
+    param([array]$UserData)
+    
+    Write-Host "[SOX - Sarbanes-Oxley Act]" -ForegroundColor Yellow
+    Write-Host "Focus: Financial data integrity, access controls, segregation of duties" -ForegroundColor Gray
+    Write-Host ""
+    
+    $privilegedUsers = ($UserData | Where-Object { $_.IsPrivileged -eq $true }).Count
+    $privilegedNoMFA = ($UserData | Where-Object { $_.IsPrivileged -eq $true -and ($_.MFAStatus -eq "No Methods Registered" -or $_.MFAStatus -eq "Unknown") }).Count
+    $adminAccounts = ($UserData | Where-Object { $_.UserRights -like "*Admin*" }).Count
+    $sharedAccounts = ($UserData | Where-Object { $_.UserName -like "*shared*" -or $_.UserName -like "*admin*" -or $_.UserName -like "*service*" }).Count
+    $inactivePrivileged = ($UserData | Where-Object { $_.IsPrivileged -eq $true -and ($_.TimeStamp -eq [DateTime]::MinValue -or $_.TimeStamp -lt (Get-Date).AddDays(-90)) }).Count
+    
+    Write-Host "  Control Point: Access Controls" -ForegroundColor Cyan
+    Write-Host "    Privileged Accounts: $privilegedUsers" -ForegroundColor White
+    Write-Host "    Admin Accounts: $adminAccounts" -ForegroundColor White
+    Write-Host "    Privileged without MFA: $privilegedNoMFA $(if ($privilegedNoMFA -gt 0) { '[NON-COMPLIANT]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($privilegedNoMFA -gt 0) { 'Red' } else { 'Green' })
+    Write-Host ""
+    
+    Write-Host "  Control Point: Segregation of Duties" -ForegroundColor Cyan
+    Write-Host "    Shared/Generic Accounts: $sharedAccounts $(if ($sharedAccounts -gt 0) { '[REVIEW REQUIRED]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($sharedAccounts -gt 0) { 'Yellow' } else { 'Green' })
+    Write-Host ""
+    
+    Write-Host "  Control Point: Account Review" -ForegroundColor Cyan
+    Write-Host "    Inactive Privileged (90+ days): $inactivePrivileged $(if ($inactivePrivileged -gt 0) { '[ACTION REQUIRED]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($inactivePrivileged -gt 0) { 'Red' } else { 'Green' })
+    Write-Host ""
+    
+    $soxCompliance = if ($privilegedNoMFA -eq 0 -and $inactivePrivileged -eq 0) { "PASS" } else { "FAIL" }
+    Write-Host "  Overall SOX Compliance: $soxCompliance" -ForegroundColor $(if ($soxCompliance -eq "PASS") { 'Green' } else { 'Red' })
+}
+
+# Get HIPAA Compliance Data
+function Get-ComplianceData-HIPAA {
+    param([array]$UserData)
+    
+    $totalUsers = $UserData.Count
+    $usersWithMFA = ($UserData | Where-Object { $_.MFAStatus -and $_.MFAStatus -ne "No Methods Registered" -and $_.MFAStatus -ne "Unknown" }).Count
+    $mfaPercentage = if ($totalUsers -gt 0) { [Math]::Round(($usersWithMFA / $totalUsers) * 100, 1) } else { 0 }
+    $guestUsers = ($UserData | Where-Object { $_.IsGuestUser -eq $true }).Count
+    $guestNoMFA = ($UserData | Where-Object { $_.IsGuestUser -eq $true -and ($_.MFAStatus -eq "No Methods Registered" -or $_.MFAStatus -eq "Unknown") }).Count
+    $disabledAccounts = ($UserData | Where-Object { $_.Status -eq "Disabled" -or $_.Enabled -eq $false }).Count
+    
+    $hipaaCompliance = if ($mfaPercentage -ge 90 -and $guestNoMFA -eq 0) { "PASS" } else { "FAIL" }
+    
+    return [PSCustomObject]@{
+        Framework = "HIPAA"
+        FrameworkName = "Health Insurance Portability and Accountability Act"
+        Focus = "Protected Health Information (PHI) access controls"
+        TotalUsers = $totalUsers
+        UsersWithMFA = $usersWithMFA
+        MFAPercentage = $mfaPercentage
+        MFAStatus = if ($mfaPercentage -ge 90) { "COMPLIANT" } else { "NON-COMPLIANT" }
+        GuestUsers = $guestUsers
+        GuestNoMFA = $guestNoMFA
+        GuestNoMFAStatus = if ($guestNoMFA -eq 0) { "COMPLIANT" } else { "NON-COMPLIANT" }
+        DisabledAccounts = $disabledAccounts
+        OverallStatus = $hipaaCompliance
+        Timestamp = Get-Date
+    }
+}
+
+# HIPAA Compliance Report
+function Write-ComplianceReport-HIPAA {
+    param([array]$UserData)
+    
+    Write-Host "[HIPAA - Health Insurance Portability and Accountability Act]" -ForegroundColor Yellow
+    Write-Host "Focus: Protected Health Information (PHI) access controls" -ForegroundColor Gray
+    Write-Host ""
+    
+    $totalUsers = $UserData.Count
+    $usersWithMFA = ($UserData | Where-Object { $_.MFAStatus -and $_.MFAStatus -ne "No Methods Registered" -and $_.MFAStatus -ne "Unknown" }).Count
+    $mfaPercentage = if ($totalUsers -gt 0) { [Math]::Round(($usersWithMFA / $totalUsers) * 100, 1) } else { 0 }
+    $guestUsers = ($UserData | Where-Object { $_.IsGuestUser -eq $true }).Count
+    $guestNoMFA = ($UserData | Where-Object { $_.IsGuestUser -eq $true -and ($_.MFAStatus -eq "No Methods Registered" -or $_.MFAStatus -eq "Unknown") }).Count
+    $disabledAccounts = ($UserData | Where-Object { $_.Status -eq "Disabled" -or $_.Enabled -eq $false }).Count
+    
+    Write-Host "  Control Point: Authentication (§164.312(a)(2)(i))" -ForegroundColor Cyan
+    Write-Host "    Users with MFA: $usersWithMFA / $totalUsers ($mfaPercentage%)" -ForegroundColor White
+    Write-Host "    MFA Compliance: $(if ($mfaPercentage -ge 90) { '[COMPLIANT]' } else { '[NON-COMPLIANT]' })" -ForegroundColor $(if ($mfaPercentage -ge 90) { 'Green' } else { 'Red' })
+    Write-Host ""
+    
+    Write-Host "  Control Point: External Access (§164.308(a)(4)(ii)(C))" -ForegroundColor Cyan
+    Write-Host "    Guest/External Users: $guestUsers" -ForegroundColor White
+    Write-Host "    Guest Users without MFA: $guestNoMFA $(if ($guestNoMFA -gt 0) { '[NON-COMPLIANT]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($guestNoMFA -gt 0) { 'Red' } else { 'Green' })
+    Write-Host ""
+    
+    Write-Host "  Control Point: Termination Procedures (§164.308(a)(3)(ii)(C))" -ForegroundColor Cyan
+    Write-Host "    Disabled Accounts: $disabledAccounts" -ForegroundColor White
+    Write-Host ""
+    
+    $hipaaCompliance = if ($mfaPercentage -ge 90 -and $guestNoMFA -eq 0) { "PASS" } else { "FAIL" }
+    Write-Host "  Overall HIPAA Compliance: $hipaaCompliance" -ForegroundColor $(if ($hipaaCompliance -eq "PASS") { 'Green' } else { 'Red' })
+}
+
+# Get GDPR Compliance Data
+function Get-ComplianceData-GDPR {
+    param([array]$UserData)
+    
+    $guestUsers = ($UserData | Where-Object { $_.IsGuestUser -eq $true }).Count
+    $inactiveUsers = ($UserData | Where-Object { $_.TimeStamp -lt (Get-Date).AddDays(-90) -or $_.TimeStamp -eq [DateTime]::MinValue }).Count
+    $disabledUsers = ($UserData | Where-Object { $_.Status -eq "Disabled" -or $_.Enabled -eq $false }).Count
+    $privilegedUsers = ($UserData | Where-Object { $_.IsPrivileged -eq $true }).Count
+    $privilegedNoMFA = ($UserData | Where-Object { $_.IsPrivileged -eq $true -and ($_.MFAStatus -eq "No Methods Registered" -or $_.MFAStatus -eq "Unknown") }).Count
+    
+    $gdprCompliance = if ($privilegedNoMFA -eq 0) { "PASS" } else { "FAIL" }
+    
+    return [PSCustomObject]@{
+        Framework = "GDPR"
+        FrameworkName = "General Data Protection Regulation"
+        Focus = "Data subject rights, access control, data minimization"
+        TotalUsers = $UserData.Count
+        InactiveUsers = $inactiveUsers
+        InactiveUsersStatus = if ($inactiveUsers -eq 0) { "COMPLIANT" } else { "REVIEW REQUIRED" }
+        DisabledUsers = $disabledUsers
+        DisabledUsersStatus = if ($disabledUsers -eq 0) { "COMPLIANT" } else { "CLEANUP NEEDED" }
+        GuestUsers = $guestUsers
+        PrivilegedUsers = $privilegedUsers
+        PrivilegedNoMFA = $privilegedNoMFA
+        PrivilegedNoMFAStatus = if ($privilegedNoMFA -eq 0) { "COMPLIANT" } else { "NON-COMPLIANT" }
+        OverallStatus = $gdprCompliance
+        Timestamp = Get-Date
+    }
+}
+
+# GDPR Compliance Report
+function Write-ComplianceReport-GDPR {
+    param([array]$UserData)
+    
+    Write-Host "[GDPR - General Data Protection Regulation]" -ForegroundColor Yellow
+    Write-Host "Focus: Data subject rights, access control, data minimization" -ForegroundColor Gray
+    Write-Host ""
+    
+    $guestUsers = ($UserData | Where-Object { $_.IsGuestUser -eq $true }).Count
+    $inactiveUsers = ($UserData | Where-Object { $_.TimeStamp -lt (Get-Date).AddDays(-90) -or $_.TimeStamp -eq [DateTime]::MinValue }).Count
+    $disabledUsers = ($UserData | Where-Object { $_.Status -eq "Disabled" -or $_.Enabled -eq $false }).Count
+    $privilegedUsers = ($UserData | Where-Object { $_.IsPrivileged -eq $true }).Count
+    $privilegedNoMFA = ($UserData | Where-Object { $_.IsPrivileged -eq $true -and ($_.MFAStatus -eq "No Methods Registered" -or $_.MFAStatus -eq "Unknown") }).Count
+    
+    Write-Host "  Control Point: Data Minimization (Article 5(1)(c))" -ForegroundColor Cyan
+    Write-Host "    Inactive Users (90+ days): $inactiveUsers $(if ($inactiveUsers -gt 0) { '[REVIEW REQUIRED]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($inactiveUsers -gt 0) { 'Yellow' } else { 'Green' })
+    Write-Host "    Disabled Accounts: $disabledUsers $(if ($disabledUsers -gt 0) { '[CLEANUP NEEDED]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($disabledUsers -gt 0) { 'Yellow' } else { 'Green' })
+    Write-Host ""
+    
+    Write-Host "  Control Point: Access Control (Article 32)" -ForegroundColor Cyan
+    Write-Host "    Guest/External Users: $guestUsers" -ForegroundColor White
+    Write-Host "    Privileged Accounts: $privilegedUsers" -ForegroundColor White
+    Write-Host "    Privileged without MFA: $privilegedNoMFA $(if ($privilegedNoMFA -gt 0) { '[NON-COMPLIANT]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($privilegedNoMFA -gt 0) { 'Red' } else { 'Green' })
+    Write-Host ""
+    
+    $gdprCompliance = if ($privilegedNoMFA -eq 0) { "PASS" } else { "FAIL" }
+    Write-Host "  Overall GDPR Compliance: $gdprCompliance" -ForegroundColor $(if ($gdprCompliance -eq "PASS") { 'Green' } else { 'Red' })
+}
+
+# Get PCI-DSS Compliance Data
+function Get-ComplianceData-PCIDSS {
+    param([array]$UserData)
+    $totalUsers = $UserData.Count
+    $usersWithMFA = ($UserData | Where-Object { $_.MFAStatus -and $_.MFAStatus -ne "No Methods Registered" -and $_.MFAStatus -ne "Unknown" }).Count
+    $mfaPercentage = if ($totalUsers -gt 0) { [Math]::Round(($usersWithMFA / $totalUsers) * 100, 1) } else { 0 }
+    $privilegedUsers = ($UserData | Where-Object { $_.IsPrivileged -eq $true }).Count
+    $privilegedNoMFA = ($UserData | Where-Object { $_.IsPrivileged -eq $true -and ($_.MFAStatus -eq "No Methods Registered" -or $_.MFAStatus -eq "Unknown") }).Count
+    $oldPasswords = ($UserData | Where-Object { $_.PasswordLastSet -and ((Get-Date) - [DateTime]$_.PasswordLastSet).Days -gt 90 }).Count
+    $inactiveUsers = ($UserData | Where-Object { $_.TimeStamp -lt (Get-Date).AddDays(-90) -or $_.TimeStamp -eq [DateTime]::MinValue }).Count
+    $pciCompliance = if ($privilegedNoMFA -eq 0 -and $oldPasswords -eq 0 -and $inactiveUsers -eq 0) { "PASS" } else { "FAIL" }
+    return [PSCustomObject]@{ Framework = "PCI-DSS"; FrameworkName = "Payment Card Industry Data Security Standard"; Focus = "Cardholder data protection"; TotalUsers = $totalUsers; UsersWithMFA = $usersWithMFA; MFAPercentage = $mfaPercentage; PrivilegedUsers = $privilegedUsers; PrivilegedNoMFA = $privilegedNoMFA; PrivilegedNoMFAStatus = if ($privilegedNoMFA -eq 0) { "COMPLIANT" } else { "NON-COMPLIANT" }; OldPasswords = $oldPasswords; OldPasswordsStatus = if ($oldPasswords -eq 0) { "COMPLIANT" } else { "NON-COMPLIANT" }; InactiveUsers = $inactiveUsers; InactiveUsersStatus = if ($inactiveUsers -eq 0) { "COMPLIANT" } else { "ACTION REQUIRED" }; OverallStatus = $pciCompliance; Timestamp = Get-Date }
+}
+
+function Get-ComplianceData-ISO27001 {
+    param([array]$UserData)
+    $totalUsers = $UserData.Count
+    $usersWithMFA = ($UserData | Where-Object { $_.MFAStatus -and $_.MFAStatus -ne "No Methods Registered" -and $_.MFAStatus -ne "Unknown" }).Count
+    $mfaPercentage = if ($totalUsers -gt 0) { [Math]::Round(($usersWithMFA / $totalUsers) * 100, 1) } else { 0 }
+    $privilegedUsers = ($UserData | Where-Object { $_.IsPrivileged -eq $true }).Count
+    $privilegedNoMFA = ($UserData | Where-Object { $_.IsPrivileged -eq $true -and ($_.MFAStatus -eq "No Methods Registered" -or $_.MFAStatus -eq "Unknown") }).Count
+    $sharedAccounts = ($UserData | Where-Object { $_.UserName -like "*shared*" -or $_.UserName -like "*admin*" -or $_.UserName -like "*service*" }).Count
+    $inactiveUsers = ($UserData | Where-Object { $_.TimeStamp -lt (Get-Date).AddDays(-90) -or $_.TimeStamp -eq [DateTime]::MinValue }).Count
+    $isoCompliance = if ($privilegedNoMFA -eq 0 -and $sharedAccounts -eq 0) { "PASS" } else { "FAIL" }
+    return [PSCustomObject]@{ Framework = "ISO27001"; FrameworkName = "Information Security Management"; Focus = "Access control, authentication"; TotalUsers = $totalUsers; UsersWithMFA = $usersWithMFA; MFAPercentage = $mfaPercentage; InactiveUsers = $inactiveUsers; InactiveUsersStatus = if ($inactiveUsers -eq 0) { "COMPLIANT" } else { "REVIEW REQUIRED" }; SharedAccounts = $sharedAccounts; SharedAccountsStatus = if ($sharedAccounts -eq 0) { "COMPLIANT" } else { "NON-COMPLIANT" }; PrivilegedUsers = $privilegedUsers; PrivilegedNoMFA = $privilegedNoMFA; PrivilegedNoMFAStatus = if ($privilegedNoMFA -eq 0) { "COMPLIANT" } else { "NON-COMPLIANT" }; OverallStatus = $isoCompliance; Timestamp = Get-Date }
+}
+
+function Get-ComplianceData-NIST {
+    param([array]$UserData)
+    $totalUsers = $UserData.Count
+    $usersWithMFA = ($UserData | Where-Object { $_.MFAStatus -and $_.MFAStatus -ne "No Methods Registered" -and $_.MFAStatus -ne "Unknown" }).Count
+    $mfaPercentage = if ($totalUsers -gt 0) { [Math]::Round(($usersWithMFA / $totalUsers) * 100, 1) } else { 0 }
+    $privilegedUsers = ($UserData | Where-Object { $_.IsPrivileged -eq $true }).Count
+    $highRiskUsers = ($UserData | Where-Object { $_.RiskLevel -eq "Critical" -or $_.RiskLevel -eq "High" }).Count
+    $inactiveUsers = ($UserData | Where-Object { $_.TimeStamp -lt (Get-Date).AddDays(-90) -or $_.TimeStamp -eq [DateTime]::MinValue }).Count
+    $nistCompliance = if ($mfaPercentage -ge 90 -and $highRiskUsers -eq 0) { "PASS" } else { "FAIL" }
+    return [PSCustomObject]@{ Framework = "NIST"; FrameworkName = "NIST Cybersecurity Framework"; Focus = "Identify, Protect, Detect"; TotalUsers = $totalUsers; PrivilegedUsers = $privilegedUsers; UsersWithMFA = $usersWithMFA; MFAPercentage = $mfaPercentage; MFAStatus = if ($mfaPercentage -ge 90) { "COMPLIANT" } else { "NON-COMPLIANT" }; HighRiskUsers = $highRiskUsers; HighRiskUsersStatus = if ($highRiskUsers -eq 0) { "COMPLIANT" } else { "REVIEW REQUIRED" }; InactiveUsers = $inactiveUsers; InactiveUsersStatus = if ($inactiveUsers -eq 0) { "COMPLIANT" } else { "REVIEW REQUIRED" }; OverallStatus = $nistCompliance; Timestamp = Get-Date }
+}
+
+function Get-ComplianceData-CIS {
+    param([array]$UserData)
+    $totalUsers = $UserData.Count
+    $usersWithMFA = ($UserData | Where-Object { $_.MFAStatus -and $_.MFAStatus -ne "No Methods Registered" -and $_.MFAStatus -ne "Unknown" }).Count
+    $mfaPercentage = if ($totalUsers -gt 0) { [Math]::Round(($usersWithMFA / $totalUsers) * 100, 1) } else { 0 }
+    $privilegedUsers = ($UserData | Where-Object { $_.IsPrivileged -eq $true }).Count
+    $privilegedNoMFA = ($UserData | Where-Object { $_.IsPrivileged -eq $true -and ($_.MFAStatus -eq "No Methods Registered" -or $_.MFAStatus -eq "Unknown") }).Count
+    $inactiveUsers = ($UserData | Where-Object { $_.TimeStamp -lt (Get-Date).AddDays(-90) -or $_.TimeStamp -eq [DateTime]::MinValue }).Count
+    $disabledUsers = ($UserData | Where-Object { $_.Status -eq "Disabled" -or $_.Enabled -eq $false }).Count
+    $cisCompliance = if ($mfaPercentage -eq 100 -and $inactiveUsers -eq 0) { "PASS" } else { "FAIL" }
+    return [PSCustomObject]@{ Framework = "CIS"; FrameworkName = "CIS Controls v8"; Focus = "Account management, MFA"; TotalUsers = $totalUsers; DisabledUsers = $disabledUsers; UsersWithMFA = $usersWithMFA; MFAPercentage = $mfaPercentage; InactiveUsers = $inactiveUsers; InactiveUsersStatus = if ($inactiveUsers -eq 0) { "COMPLIANT" } else { "ACTION REQUIRED" }; AllUsersMFAStatus = if ($mfaPercentage -eq 100) { "COMPLIANT" } else { "NON-COMPLIANT" }; PrivilegedUsers = $privilegedUsers; PrivilegedNoMFA = $privilegedNoMFA; PrivilegedNoMFAStatus = if ($privilegedNoMFA -eq 0) { "COMPLIANT" } else { "CRITICAL" }; OverallStatus = $cisCompliance; Timestamp = Get-Date }
+}
+
+# PCI-DSS Compliance Report
+function Write-ComplianceReport-PCIDSS {
+    param([array]$UserData)
+    
+    Write-Host "[PCI-DSS - Payment Card Industry Data Security Standard]" -ForegroundColor Yellow
+    Write-Host "Focus: Cardholder data protection, strong access control" -ForegroundColor Gray
+    Write-Host ""
+    
+    $totalUsers = $UserData.Count
+    $usersWithMFA = ($UserData | Where-Object { $_.MFAStatus -and $_.MFAStatus -ne "No Methods Registered" -and $_.MFAStatus -ne "Unknown" }).Count
+    $mfaPercentage = if ($totalUsers -gt 0) { [Math]::Round(($usersWithMFA / $totalUsers) * 100, 1) } else { 0 }
+    $privilegedUsers = ($UserData | Where-Object { $_.IsPrivileged -eq $true }).Count
+    $privilegedNoMFA = ($UserData | Where-Object { $_.IsPrivileged -eq $true -and ($_.MFAStatus -eq "No Methods Registered" -or $_.MFAStatus -eq "Unknown") }).Count
+    $oldPasswords = ($UserData | Where-Object { $_.PasswordLastSet -and ((Get-Date) - [DateTime]$_.PasswordLastSet).Days -gt 90 }).Count
+    $inactiveUsers = ($UserData | Where-Object { $_.TimeStamp -lt (Get-Date).AddDays(-90) -or $_.TimeStamp -eq [DateTime]::MinValue }).Count
+    
+    Write-Host "  Requirement 8.3: Multi-Factor Authentication" -ForegroundColor Cyan
+    Write-Host "    All Users with MFA: $usersWithMFA / $totalUsers ($mfaPercentage%)" -ForegroundColor White
+    Write-Host "    Total Privileged Accounts: $privilegedUsers" -ForegroundColor White
+    Write-Host "    Privileged without MFA: $privilegedNoMFA $(if ($privilegedNoMFA -gt 0) { '[NON-COMPLIANT]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($privilegedNoMFA -gt 0) { 'Red' } else { 'Green' })
+    Write-Host ""
+    
+    Write-Host "  Requirement 8.2.4: Password Age (90 days)" -ForegroundColor Cyan
+    Write-Host "    Users with old passwords (90+ days): $oldPasswords $(if ($oldPasswords -gt 0) { '[NON-COMPLIANT]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($oldPasswords -gt 0) { 'Red' } else { 'Green' })
+    Write-Host ""
+    
+    Write-Host "  Requirement 8.1.4: Remove/Disable Inactive Accounts (90 days)" -ForegroundColor Cyan
+    Write-Host "    Inactive Accounts (90+ days): $inactiveUsers $(if ($inactiveUsers -gt 0) { '[ACTION REQUIRED]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($inactiveUsers -gt 0) { 'Red' } else { 'Green' })
+    Write-Host ""
+    
+    $pciCompliance = if ($privilegedNoMFA -eq 0 -and $oldPasswords -eq 0 -and $inactiveUsers -eq 0) { "PASS" } else { "FAIL" }
+    Write-Host "  Overall PCI-DSS Compliance: $pciCompliance" -ForegroundColor $(if ($pciCompliance -eq "PASS") { 'Green' } else { 'Red' })
+}
+
+# ISO 27001 Compliance Report
+function Write-ComplianceReport-ISO27001 {
+    param([array]$UserData)
+    
+    Write-Host "[ISO 27001 - Information Security Management]" -ForegroundColor Yellow
+    Write-Host "Focus: Access control, user management, authentication" -ForegroundColor Gray
+    Write-Host ""
+    
+    $totalUsers = $UserData.Count
+    $usersWithMFA = ($UserData | Where-Object { $_.MFAStatus -and $_.MFAStatus -ne "No Methods Registered" -and $_.MFAStatus -ne "Unknown" }).Count
+    $mfaPercentage = if ($totalUsers -gt 0) { [Math]::Round(($usersWithMFA / $totalUsers) * 100, 1) } else { 0 }
+    $privilegedUsers = ($UserData | Where-Object { $_.IsPrivileged -eq $true }).Count
+    $privilegedNoMFA = ($UserData | Where-Object { $_.IsPrivileged -eq $true -and ($_.MFAStatus -eq "No Methods Registered" -or $_.MFAStatus -eq "Unknown") }).Count
+    $sharedAccounts = ($UserData | Where-Object { $_.UserName -like "*shared*" -or $_.UserName -like "*admin*" -or $_.UserName -like "*service*" }).Count
+    $inactiveUsers = ($UserData | Where-Object { $_.TimeStamp -lt (Get-Date).AddDays(-90) -or $_.TimeStamp -eq [DateTime]::MinValue }).Count
+    
+    Write-Host "  A.9.2.1: User Registration" -ForegroundColor Cyan
+    Write-Host "    Total Registered Users: $totalUsers" -ForegroundColor White
+    Write-Host "    Inactive Users (90+ days): $inactiveUsers $(if ($inactiveUsers -gt 0) { '[REVIEW REQUIRED]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($inactiveUsers -gt 0) { 'Yellow' } else { 'Green' })
+    Write-Host ""
+    
+    Write-Host "  A.9.2.4: Management of Secret Authentication Information" -ForegroundColor Cyan
+    Write-Host "    Users with MFA: $usersWithMFA / $totalUsers ($mfaPercentage%)" -ForegroundColor White
+    Write-Host "    Shared Accounts: $sharedAccounts $(if ($sharedAccounts -gt 0) { '[NON-COMPLIANT]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($sharedAccounts -gt 0) { 'Red' } else { 'Green' })
+    Write-Host ""
+    
+    Write-Host "  A.9.2.3: Management of Privileged Access Rights" -ForegroundColor Cyan
+    Write-Host "    Total Privileged Accounts: $privilegedUsers" -ForegroundColor White
+    Write-Host "    Privileged without MFA: $privilegedNoMFA $(if ($privilegedNoMFA -gt 0) { '[NON-COMPLIANT]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($privilegedNoMFA -gt 0) { 'Red' } else { 'Green' })
+    Write-Host ""
+    
+    $isoCompliance = if ($privilegedNoMFA -eq 0 -and $sharedAccounts -eq 0) { "PASS" } else { "FAIL" }
+    Write-Host "  Overall ISO 27001 Compliance: $isoCompliance" -ForegroundColor $(if ($isoCompliance -eq "PASS") { 'Green' } else { 'Red' })
+}
+
+# NIST Compliance Report
+function Write-ComplianceReport-NIST {
+    param([array]$UserData)
+    
+    Write-Host "[NIST CSF - Cybersecurity Framework]" -ForegroundColor Yellow
+    Write-Host "Focus: Identify, Protect, Detect, Respond, Recover" -ForegroundColor Gray
+    Write-Host ""
+    
+    $totalUsers = $UserData.Count
+    $usersWithMFA = ($UserData | Where-Object { $_.MFAStatus -and $_.MFAStatus -ne "No Methods Registered" -and $_.MFAStatus -ne "Unknown" }).Count
+    $mfaPercentage = if ($totalUsers -gt 0) { [Math]::Round(($usersWithMFA / $totalUsers) * 100, 1) } else { 0 }
+    $privilegedUsers = ($UserData | Where-Object { $_.IsPrivileged -eq $true }).Count
+    $highRiskUsers = ($UserData | Where-Object { $_.RiskLevel -eq "Critical" -or $_.RiskLevel -eq "High" }).Count
+    $inactiveUsers = ($UserData | Where-Object { $_.TimeStamp -lt (Get-Date).AddDays(-90) -or $_.TimeStamp -eq [DateTime]::MinValue }).Count
+    
+    Write-Host "  PR.AC-1: Identities and Credentials" -ForegroundColor Cyan
+    Write-Host "    Total User Identities: $totalUsers" -ForegroundColor White
+    Write-Host "    Privileged Accounts: $privilegedUsers" -ForegroundColor White
+    Write-Host ""
+    
+    Write-Host "  PR.AC-7: Users and Devices Authenticated" -ForegroundColor Cyan
+    Write-Host "    Users with MFA: $usersWithMFA / $totalUsers ($mfaPercentage%)" -ForegroundColor White
+    Write-Host "    MFA Compliance: $(if ($mfaPercentage -ge 90) { '[COMPLIANT]' } else { '[NON-COMPLIANT]' })" -ForegroundColor $(if ($mfaPercentage -ge 90) { 'Green' } else { 'Red' })
+    Write-Host ""
+    
+    Write-Host "  DE.CM-1: Detect Unauthorized Access" -ForegroundColor Cyan
+    Write-Host "    High Risk Users: $highRiskUsers $(if ($highRiskUsers -gt 0) { '[REVIEW REQUIRED]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($highRiskUsers -gt 0) { 'Yellow' } else { 'Green' })
+    Write-Host "    Inactive Accounts: $inactiveUsers $(if ($inactiveUsers -gt 0) { '[REVIEW REQUIRED]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($inactiveUsers -gt 0) { 'Yellow' } else { 'Green' })
+    Write-Host ""
+    
+    $nistCompliance = if ($mfaPercentage -ge 90 -and $highRiskUsers -eq 0) { "PASS" } else { "FAIL" }
+    Write-Host "  Overall NIST CSF Compliance: $nistCompliance" -ForegroundColor $(if ($nistCompliance -eq "PASS") { 'Green' } else { 'Red' })
+}
+
+# CIS Controls Compliance Report
+function Write-ComplianceReport-CIS {
+    param([array]$UserData)
+    
+    Write-Host "[CIS Controls v8 - Critical Security Controls]" -ForegroundColor Yellow
+    Write-Host "Focus: Account management, access control, MFA" -ForegroundColor Gray
+    Write-Host ""
+    
+    $totalUsers = $UserData.Count
+    $usersWithMFA = ($UserData | Where-Object { $_.MFAStatus -and $_.MFAStatus -ne "No Methods Registered" -and $_.MFAStatus -ne "Unknown" }).Count
+    $mfaPercentage = if ($totalUsers -gt 0) { [Math]::Round(($usersWithMFA / $totalUsers) * 100, 1) } else { 0 }
+    $privilegedUsers = ($UserData | Where-Object { $_.IsPrivileged -eq $true }).Count
+    $privilegedNoMFA = ($UserData | Where-Object { $_.IsPrivileged -eq $true -and ($_.MFAStatus -eq "No Methods Registered" -or $_.MFAStatus -eq "Unknown") }).Count
+    $inactiveUsers = ($UserData | Where-Object { $_.TimeStamp -lt (Get-Date).AddDays(-90) -or $_.TimeStamp -eq [DateTime]::MinValue }).Count
+    $disabledUsers = ($UserData | Where-Object { $_.Status -eq "Disabled" -or $_.Enabled -eq $false }).Count
+    
+    Write-Host "  Control 5.1: Establish Unique Accounts" -ForegroundColor Cyan
+    Write-Host "    Total User Accounts: $totalUsers" -ForegroundColor White
+    Write-Host "    Disabled Accounts: $disabledUsers" -ForegroundColor White
+    Write-Host ""
+    
+    Write-Host "  Control 5.2: Use Unique Passwords" -ForegroundColor Cyan
+    Write-Host "    Users with MFA: $usersWithMFA / $totalUsers ($mfaPercentage%)" -ForegroundColor White
+    Write-Host ""
+    
+    Write-Host "  Control 5.3: Disable Dormant Accounts" -ForegroundColor Cyan
+    Write-Host "    Inactive Accounts (90+ days): $inactiveUsers $(if ($inactiveUsers -gt 0) { '[ACTION REQUIRED]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($inactiveUsers -gt 0) { 'Red' } else { 'Green' })
+    Write-Host ""
+    
+    Write-Host "  Control 6.3: Require MFA for All Accounts" -ForegroundColor Cyan
+    Write-Host "    All Users with MFA: $mfaPercentage% $(if ($mfaPercentage -eq 100) { '[COMPLIANT]' } else { '[NON-COMPLIANT]' })" -ForegroundColor $(if ($mfaPercentage -eq 100) { 'Green' } else { 'Red' })
+    Write-Host "    Total Privileged Accounts: $privilegedUsers" -ForegroundColor White
+    Write-Host "    Privileged without MFA: $privilegedNoMFA $(if ($privilegedNoMFA -gt 0) { '[CRITICAL]' } else { '[COMPLIANT]' })" -ForegroundColor $(if ($privilegedNoMFA -gt 0) { 'Red' } else { 'Green' })
+    Write-Host ""
+    
+    $cisCompliance = if ($mfaPercentage -eq 100 -and $inactiveUsers -eq 0) { "PASS" } else { "FAIL" }
+    Write-Host "  Overall CIS Controls Compliance: $cisCompliance" -ForegroundColor $(if ($cisCompliance -eq "PASS") { 'Green' } else { 'Red' })
+}
+#endregion
+
+# Function to load configuration from file
+function Get-Configuration {
+    param(
+        [string]$ConfigPath
+    )
+    
+    if (-not (Test-Path $ConfigPath)) {
+        Write-OperationStatus "Configuration file not found: $ConfigPath" "Warning"
+        return $null
+    }
+    
+    try {
+        $configContent = Get-Content $ConfigPath -Raw -Encoding UTF8
+        $config = $configContent | ConvertFrom-Json
+        Write-OperationStatus "Configuration loaded from: $ConfigPath" "Success"
+        return $config
+    } catch {
+        Write-OperationStatus "Failed to load configuration: $($_.Exception.Message)" "Error"
+        return $null
+    }
+}
+
+# Function to apply configuration profile
+function Set-ConfigurationProfile {
+    param(
+        [string]$ProfileName
+    )
+    
+    Write-OperationStatus "Applying security audit profile: $ProfileName" "Info"
+    
+    switch ($ProfileName) {
+        "Quick" {
+            $script:IncludeLocal = $false
+            $script:IncludeAD = $false
+            $script:IncludeEntraID = $true
+            $script:ListUsers = $true
+            $script:MaxRecords = 50
+            $script:IncludeRiskScore = $true
+            $script:Minimal = $true
+            Write-OperationStatus "Quick profile: Entra ID users only, risk scoring, minimal output" "Success"
+        }
+        "Standard" {
+            $script:IncludeLocal = $false
+            $script:IncludeAD = $false
+            $script:IncludeEntraID = $true
+            $script:ListUsers = $true
+            $script:MaxRecords = 200
+            $script:IncludeRiskScore = $true
+            $script:IncludePrivilegedAccounts = $true
+            $script:IncludeServiceAccounts = $true
+            $script:IncludePasswordPolicy = $true
+            Write-OperationStatus "Standard profile: Entra ID users, risk analysis, privileged accounts, password policy" "Success"
+        }
+        "Comprehensive" {
+            $script:IncludeLocal = $true
+            $script:IncludeAD = $true
+            $script:IncludeEntraID = $true
+            $script:ListUsers = $true
+            $script:MaxRecords = 500
+            $script:IncludeRiskScore = $true
+            $script:IncludePrivilegedAccounts = $true
+            $script:IncludeServiceAccounts = $true
+            $script:IncludeGuestUsers = $true
+            $script:IncludePasswordPolicy = $true
+            $script:IncludeAccountLockout = $true
+            $script:IncludeGroupMembership = $true
+            $script:IncludeAppPermissions = $true
+            $script:IncludeDeviceCompliance = $true
+            $script:IncludeConditionalAccess = $true
+            $script:IncludeRiskySignins = $true
+            Write-OperationStatus "Comprehensive profile: All sources, all analysis features" "Success"
+        }
+        "Executive" {
+            $script:IncludeLocal = $false
+            $script:IncludeAD = $false
+            $script:IncludeEntraID = $true
+            $script:ListUsers = $true
+            $script:MaxRecords = 1000
+            $script:IncludeRiskScore = $true
+            $script:IncludePrivilegedAccounts = $true
+            $script:IncludeServiceAccounts = $true
+            $script:IncludeGuestUsers = $true
+            $script:IncludePasswordPolicy = $true
+            $script:IncludeExportFormats = $true
+            $script:ExportExcel = $true
+            Write-OperationStatus "Executive profile: High-level security overview with Excel export" "Success"
+        }
+        "Compliance" {
+            $script:IncludeLocal = $false
+            $script:IncludeAD = $false
+            $script:IncludeEntraID = $true
+            $script:ListUsers = $true
+            $script:MaxRecords = 1000
+            $script:IncludeRiskScore = $true
+            $script:IncludePrivilegedAccounts = $true
+            $script:IncludeServiceAccounts = $true
+            $script:IncludeGuestUsers = $true
+            $script:IncludePasswordPolicy = $true
+            $script:IncludeAccountLockout = $true
+            $script:IncludeGroupMembership = $true
+            $script:IncludeAppPermissions = $true
+            $script:IncludeDeviceCompliance = $true
+            $script:IncludeConditionalAccess = $true
+            $script:IncludeRiskySignins = $true
+            $script:IncludeExportFormats = $true
+            $script:ExportExcel = $true
+            Write-OperationStatus "Compliance profile: Full audit trail for compliance reporting" "Success"
+        }
+        default {
+            Write-OperationStatus "Unknown profile: $ProfileName" "Warning"
+        }
+    }
+}
+
+# Function to create default configuration file
+function New-DefaultConfiguration {
+    param(
+        [string]$ConfigPath = ".\users.config.json"
+    )
+    
+    $defaultConfig = @{
+        "DefaultProfile" = "Standard"
+        "MaxRecords" = 200
+        "IncludeSources" = @{
+            "Local" = $false
+            "ActiveDirectory" = $false
+            "EntraID" = $true
+        }
+        "AnalysisFeatures" = @{
+            "RiskScore" = $true
+            "PrivilegedAccounts" = $true
+            "ServiceAccounts" = $true
+            "GuestUsers" = $false
+            "PasswordPolicy" = $true
+            "AccountLockout" = $false
+            "GroupMembership" = $false
+            "AppPermissions" = $false
+            "DeviceCompliance" = $false
+            "ConditionalAccess" = $false
+            "RiskySignins" = $false
+        }
+        "ExportOptions" = @{
+            "Excel" = $false
+            "MultipleFormats" = $false
+            "DefaultPath" = ".\SecurityAudit_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+        }
+        "DisplayOptions" = @{
+            "Minimal" = $false
+            "OutGridView" = $false
+            "ShowSummary" = $true
+        }
+    }
+    
+    try {
+        $defaultConfig | ConvertTo-Json -Depth 10 | Out-File -FilePath $ConfigPath -Encoding UTF8
+        Write-OperationStatus "Default configuration created: $ConfigPath" "Success"
+        return $true
+    } catch {
+        Write-OperationStatus "Failed to create configuration file: $($_.Exception.Message)" "Error"
+        return $false
+    }
 }
 
 # Function to get local user rights
@@ -336,13 +1686,13 @@ function Get-SecurityRiskScore {
         $passwordAge = (Get-Date) - [DateTime]$User.PasswordLastSet
         if ($passwordAge.Days -gt 365) {
             $riskScore += 25
-            $riskFactors += "Password >1yr"
+            $riskFactors += "Password 1yr+"
         } elseif ($passwordAge.Days -gt 180) {
             $riskScore += 15
-            $riskFactors += "Password >6mo"
+            $riskFactors += "Password 6mo+"
         } elseif ($passwordAge.Days -gt 90) {
             $riskScore += 10
-            $riskFactors += "Password >3mo"
+            $riskFactors += "Password 3mo+"
         }
     } else {
         $riskScore += 15
@@ -357,10 +1707,10 @@ function Get-SecurityRiskScore {
         $lastLogin = (Get-Date) - [DateTime]$User.TimeStamp
         if ($lastLogin.Days -gt 90) {
             $riskScore += 15
-            $riskFactors += "Inactive >90d"
+            $riskFactors += "Inactive 90d+"
         } elseif ($lastLogin.Days -gt 30) {
             $riskScore += 10
-            $riskFactors += "Inactive >30d"
+            $riskFactors += "Inactive 30d+"
         }
     }
     
@@ -487,9 +1837,9 @@ function Get-ServiceAccountAnalysis {
     if ($User.TimeStamp -ne [DateTime]::MinValue) {
         $lastActivity = (Get-Date) - [DateTime]$User.TimeStamp
         if ($lastActivity.Days -gt 365) {
-            $serviceRisks += "No activity >1yr"
+            $serviceRisks += "No activity 1yr+"
         } elseif ($lastActivity.Days -gt 180) {
-            $serviceRisks += "No activity >6mo"
+            $serviceRisks += "No activity 6mo+"
         }
     } else {
         $serviceRisks += "Never logged in"
@@ -555,9 +1905,9 @@ function Get-GuestUserAnalysis {
         if ($User.TimeStamp -ne [DateTime]::MinValue) {
             $lastActivity = (Get-Date) - [DateTime]$User.TimeStamp
             if ($lastActivity.Days -gt 90) {
-                $guestRisks += "Inactive guest >90d"
+                $guestRisks += "Inactive guest 90d+"
             } elseif ($lastActivity.Days -gt 30) {
-                $guestRisks += "Inactive guest >30d"
+                $guestRisks += "Inactive guest 30d+"
             }
         } else {
             $guestRisks += "Guest never accessed"
@@ -675,13 +2025,13 @@ function Get-PasswordPolicyAnalysis {
         $passwordAge = (Get-Date) - [DateTime]$User.PasswordLastSet
         
         if ($passwordAge.Days -gt 365) {
-            $policyViolations += "Password >1yr old"
+            $policyViolations += "Password 1yr+ old"
             $policyScore -= 30
         } elseif ($passwordAge.Days -gt 180) {
-            $policyViolations += "Password >6mo old"
+            $policyViolations += "Password 6mo+ old"
             $policyScore -= 15
         } elseif ($passwordAge.Days -gt 90) {
-            $policyViolations += "Password >3mo old"
+            $policyViolations += "Password 3mo+ old"
             $policyScore -= 5
         }
     } else {
@@ -711,7 +2061,7 @@ function Get-PasswordPolicyAnalysis {
         if ($User.PasswordLastSet) {
             $passwordAge = (Get-Date) - [DateTime]$User.PasswordLastSet
             if ($passwordAge.Days -gt 180) {
-                $policyViolations += "Service account password >180d"
+                $policyViolations += "Service account password 180d+"
                 $policyScore -= 15
             }
         }
@@ -722,7 +2072,7 @@ function Get-PasswordPolicyAnalysis {
         if ($User.PasswordLastSet) {
             $passwordAge = (Get-Date) - [DateTime]$User.PasswordLastSet
             if ($passwordAge.Days -gt 90) {
-                $policyViolations += "Guest password >90d"
+                $policyViolations += "Guest password 90d+"
                 $policyScore -= 10
             }
         }
@@ -770,7 +2120,7 @@ function Get-AccountLockoutAnalysis {
     } elseif ($User.TimeStamp) {
         $lastActivity = (Get-Date) - [DateTime]$User.TimeStamp
         if ($lastActivity.Days -gt 30) {
-            $lockoutRisks += "Inactive >30d (potential lockout)"
+            $lockoutRisks += "Inactive 30d+ (potential lockout)"
             $lockoutScore -= 15
         }
     }
@@ -1096,7 +2446,31 @@ function Show-Help {
     Write-Host "  -IncludeGroupMembership : Analyze group memberships and nested group relationships"
     Write-Host "  -IncludeAppPermissions  : Audit application permissions and consent grants"
     Write-Host "  -IncludeExportFormats   : Add multiple export formats (CSV, JSON, HTML, XML)"
+    Write-Host "  -ConfigFile <path>      : Load configuration from JSON file"
+    Write-Host "  -Profile <name>         : Use predefined profile (Quick, Standard, Comprehensive, Executive, Compliance)"
     Write-Host "  -Help                   : Display this help message"
+    Write-Host ""
+    Write-Host "ADVANCED FILTERING:" -ForegroundColor Yellow
+    Write-Host "  -FilterByDepartment <string>   : Filter users by department"
+    Write-Host "  -FilterByLocation <string>     : Filter users by office location"
+    Write-Host "  -FilterByJobTitle <string>     : Filter users by job title"
+    Write-Host "  -LastLoginAfter <datetime>     : Filter users who logged in after this date"
+    Write-Host "  -LastLoginBefore <datetime>    : Filter users who logged in before this date"
+    Write-Host "  -FilterByRiskLevel <string>    : Filter by risk level (Critical, High, Medium, Low, Minimal)"
+    Write-Host "  -ShowOnlyNoMFA                 : Show only users without MFA"
+    Write-Host "  -ShowOnlyPrivileged            : Show only privileged accounts"
+    Write-Host "  -ShowOnlyDisabled              : Show only disabled accounts"
+    Write-Host "  -ShowOnlyGuests                : Show only guest users"
+    Write-Host "  -InactiveDays <int>            : Show only inactive accounts (no login in X days)"
+    Write-Host ""
+    Write-Host "CACHING:" -ForegroundColor Yellow
+    Write-Host "  -UseCache                      : Use cached data if available"
+    Write-Host "  -CacheExpiryMinutes <int>      : Cache expiry time in minutes (default: 60)"
+    Write-Host "  -ClearCache                    : Clear cache before running"
+    Write-Host ""
+    Write-Host "COMPLIANCE REPORTING:" -ForegroundColor Yellow
+    Write-Host "  -ComplianceFramework <string[]>: Generate compliance report for specific framework(s)"
+    Write-Host "                                   Options: SOX, HIPAA, GDPR, PCI-DSS, ISO27001, NIST, CIS, All"
     Write-Host ""
     Write-Host "EXAMPLES:" -ForegroundColor Yellow
     Write-Host "  .\users.ps1"
@@ -1168,11 +2542,35 @@ function Show-Help {
     Write-Host "  .\users.ps1 -IncludeEntraID -ListUsers -IncludeExportFormats -ExportExcel"
     Write-Host "    Exports to multiple formats (Excel, CSV, JSON, HTML, XML)"
     Write-Host ""
+    Write-Host "  .\users.ps1 -Profile Comprehensive"
+    Write-Host "    Runs comprehensive security audit with all analysis features"
+    Write-Host ""
+    Write-Host "  .\users.ps1 -Profile Executive -ExportExcel"
+    Write-Host "    Generates executive summary with Excel export"
+    Write-Host ""
+    Write-Host "  .\users.ps1 -ConfigFile .\myconfig.json"
+    Write-Host "    Loads custom configuration from JSON file"
+    Write-Host ""
     Write-Host "  .\users.ps1 -IncludeEntraID -ListUsers -Minimal"
     Write-Host "    Shows minimal user information (User, Rights, MFA, Roles, Last Login)"
     Write-Host ""
     Write-Host "  .\users.ps1 -IncludeAD -ListUsers -Minimal"
     Write-Host "    Shows minimal Active Directory user information"
+    Write-Host ""
+    Write-Host "  .\users.ps1 -IncludeEntraID -ListUsers -FilterByDepartment 'IT' -ShowOnlyNoMFA"
+    Write-Host "    Shows IT department users who don't have MFA enabled"
+    Write-Host ""
+    Write-Host "  .\users.ps1 -IncludeEntraID -ListUsers -InactiveDays 90"
+    Write-Host "    Shows users who haven't logged in for 90+ days"
+    Write-Host ""
+    Write-Host "  .\users.ps1 -IncludeEntraID -ListUsers -UseCache -CacheExpiryMinutes 30"
+    Write-Host "    Uses cached data if available and less than 30 minutes old (improves performance)"
+    Write-Host ""
+    Write-Host "  .\users.ps1 -IncludeEntraID -ListUsers -ComplianceFramework 'SOX','HIPAA'"
+    Write-Host "    Generates SOX and HIPAA compliance reports"
+    Write-Host ""
+    Write-Host "  .\users.ps1 -IncludeEntraID -ListUsers -ComplianceFramework 'All'"
+    Write-Host "    Generates compliance reports for all frameworks (SOX, HIPAA, GDPR, PCI-DSS, ISO27001, NIST, CIS)"
     Write-Host ""
     Write-Host "REQUIREMENTS:" -ForegroundColor Yellow
     Write-Host "  Local Logs:"
@@ -1188,6 +2586,45 @@ function Show-Help {
     Write-Host "    - Requires: AuditLog.Read.All, Directory.Read.All, User.Read.All,"
     Write-Host "      and UserAuthenticationMethod.Read.All permissions"
     Write-Host ""
+}
+
+# Handle configuration and profiles
+if ($ConfigFile) {
+    $config = Get-Configuration -ConfigPath $ConfigFile
+    if ($config) {
+        # Apply configuration settings
+        if ($config.MaxRecords) { $MaxRecords = $config.MaxRecords }
+        if ($config.IncludeSources) {
+            if ($config.IncludeSources.Local) { $IncludeLocal = $true }
+            if ($config.IncludeSources.ActiveDirectory) { $IncludeAD = $true }
+            if ($config.IncludeSources.EntraID) { $IncludeEntraID = $true }
+        }
+        if ($config.AnalysisFeatures) {
+            if ($config.AnalysisFeatures.RiskScore) { $IncludeRiskScore = $true }
+            if ($config.AnalysisFeatures.PrivilegedAccounts) { $IncludePrivilegedAccounts = $true }
+            if ($config.AnalysisFeatures.ServiceAccounts) { $IncludeServiceAccounts = $true }
+            if ($config.AnalysisFeatures.GuestUsers) { $IncludeGuestUsers = $true }
+            if ($config.AnalysisFeatures.PasswordPolicy) { $IncludePasswordPolicy = $true }
+            if ($config.AnalysisFeatures.AccountLockout) { $IncludeAccountLockout = $true }
+            if ($config.AnalysisFeatures.GroupMembership) { $IncludeGroupMembership = $true }
+            if ($config.AnalysisFeatures.AppPermissions) { $IncludeAppPermissions = $true }
+            if ($config.AnalysisFeatures.DeviceCompliance) { $IncludeDeviceCompliance = $true }
+            if ($config.AnalysisFeatures.ConditionalAccess) { $IncludeConditionalAccess = $true }
+            if ($config.AnalysisFeatures.RiskySignins) { $IncludeRiskySignins = $true }
+        }
+        if ($config.ExportOptions) {
+            if ($config.ExportOptions.Excel) { $ExportExcel = $true }
+            if ($config.ExportOptions.MultipleFormats) { $IncludeExportFormats = $true }
+        }
+        if ($config.DisplayOptions) {
+            if ($config.DisplayOptions.Minimal) { $Minimal = $true }
+            if ($config.DisplayOptions.OutGridView) { $OutGridView = $true }
+        }
+    }
+}
+
+if ($Profile) {
+    Set-ConfigurationProfile -ProfileName $Profile
 }
 
 # Check if no meaningful parameters were provided (show help by default)
@@ -1211,7 +2648,9 @@ if ($Help -or
      -not $IncludeRiskySignins -and
      -not $IncludeGroupMembership -and
      -not $IncludeAppPermissions -and
-     -not $IncludeExportFormats)) {
+     -not $IncludeExportFormats -and
+     -not $ConfigFile -and
+     -not $Profile)) {
     Show-Help
     exit 0
 }
@@ -1406,12 +2845,15 @@ function Get-EntraIDUsersList {
             }
         }
         
-        Write-Verbose "Found $($mgUsers.Count) Entra ID users"
+        Write-OperationStatus "Found $($mgUsers.Count) Entra ID users" "Success"
         
         $userList = @()
         $userCount = 0
+        $totalUsers = $mgUsers.Count
+        
         foreach ($mgUser in $mgUsers) {
             $userCount++
+            Show-ProgressWithTiming -Activity "Processing Entra ID Users" -Status "Analyzing user" -Current $userCount -Total $totalUsers -CurrentItem $mgUser.UserPrincipalName
             Write-Verbose "Processing user $userCount of $($mgUsers.Count): $($mgUser.UserPrincipalName)"
             
             # Process user data
@@ -1500,18 +2942,18 @@ function Get-EntraIDUsersList {
                     }
                     
                     if ($IncludePIN) {
-                        # Get PIN last set date from Windows Hello for Business method
-                        if ($windowsHelloMethod) {
-                            try {
-                                if ($windowsHelloMethod.AdditionalProperties.createdDateTime) {
-                                    $pinLastSet = [DateTime]$windowsHelloMethod.AdditionalProperties.createdDateTime
-                                } elseif ($windowsHelloMethod.AdditionalProperties.lastModifiedDateTime) {
-                                    $pinLastSet = [DateTime]$windowsHelloMethod.AdditionalProperties.lastModifiedDateTime
-                                }
-                                Write-Verbose "Windows Hello PIN last set: $pinLastSet"
-                            } catch {
-                                Write-Verbose "Could not parse Windows Hello PIN date: $($_.Exception.Message)"
+                    # Get PIN last set date from Windows Hello for Business method
+                    if ($windowsHelloMethod) {
+                        try {
+                            if ($windowsHelloMethod.AdditionalProperties.createdDateTime) {
+                                $pinLastSet = [DateTime]$windowsHelloMethod.AdditionalProperties.createdDateTime
+                            } elseif ($windowsHelloMethod.AdditionalProperties.lastModifiedDateTime) {
+                                $pinLastSet = [DateTime]$windowsHelloMethod.AdditionalProperties.lastModifiedDateTime
                             }
+                            Write-Verbose "Windows Hello PIN last set: $pinLastSet"
+                        } catch {
+                            Write-Verbose "Could not parse Windows Hello PIN date: $($_.Exception.Message)"
+                        }
                         }
 
                     }
@@ -1647,6 +3089,9 @@ function Get-EntraIDUsersList {
             
             $userList += $userObj
         }
+        
+        Write-Progress -Activity "Processing Entra ID Users" -Completed
+        Write-OperationStatus "Completed processing $($userList.Count) users" "Success"
         
         return $userList
         
@@ -2095,8 +3540,59 @@ if ($IncludeEntraID) {
     Write-Host ""
 }
 
+# Handle caching
+if ($ClearCache) {
+    Clear-AuditCache
+}
+
+# Try to load from cache if enabled
+$cacheKey = "UserAudit_$($IncludeLocal)_$($IncludeAD)_$($IncludeEntraID)_$($ListUsers)"
+if ($UseCache -and $allLoginHistory.Count -eq 0) {
+    $cachedData = Get-FromCache -CacheKey $cacheKey -ExpiryMinutes $CacheExpiryMinutes
+    if ($cachedData) {
+        $allLoginHistory = $cachedData
+        Write-OperationStatus "Using cached data ($($allLoginHistory.Count) records)" "Success"
+    }
+}
+
+# Save to cache if enabled and we have fresh data
+if ($UseCache -and $allLoginHistory.Count -gt 0 -and -not $cachedData) {
+    Save-ToCache -CacheKey $cacheKey -Data $allLoginHistory
+}
+
 # Display combined results
 if ($allLoginHistory.Count -gt 0) {
+    # Apply advanced filters if specified
+    $hasFilters = $FilterByDepartment -or $FilterByLocation -or $FilterByJobTitle -or $LastLoginAfter -or $LastLoginBefore -or $FilterByRiskLevel -or $ShowOnlyNoMFA -or $ShowOnlyPrivileged -or $ShowOnlyDisabled -or $ShowOnlyGuests -or ($InactiveDays -gt 0)
+    
+    if ($hasFilters) {
+        $originalCount = $allLoginHistory.Count
+        $allLoginHistory = Invoke-AdvancedFilters -UserData $allLoginHistory `
+            -Department $FilterByDepartment `
+            -Location $FilterByLocation `
+            -JobTitle $FilterByJobTitle `
+            -LoginAfter $LastLoginAfter `
+            -LoginBefore $LastLoginBefore `
+            -RiskLevel $FilterByRiskLevel `
+            -OnlyNoMFA:$ShowOnlyNoMFA `
+            -OnlyPrivileged:$ShowOnlyPrivileged `
+            -OnlyDisabled:$ShowOnlyDisabled `
+            -OnlyGuests:$ShowOnlyGuests `
+            -InactiveDays $InactiveDays
+        
+        if ($allLoginHistory.Count -eq 0) {
+            Write-Host "`n" + "="*70 -ForegroundColor Yellow
+            Write-Host "NO RESULTS MATCH THE APPLIED FILTERS" -ForegroundColor Yellow
+            Write-Host "="*70 -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Original record count: $originalCount" -ForegroundColor Gray
+            Write-Host "Filtered record count: 0" -ForegroundColor Gray
+            Write-Host ""
+            Write-Host "Try adjusting your filter criteria." -ForegroundColor Gray
+            return
+        }
+    }
+    
     Write-Host "=== Login Records (Total: $($allLoginHistory.Count)) ===" -ForegroundColor Cyan
     Write-Host ""
     
@@ -2113,7 +3609,8 @@ if ($allLoginHistory.Count -gt 0) {
         if ($OutGridView) {
             $allLoginHistory | Out-GridView -Title "Users List"
             if ($ExportExcel) { $exportData = $allLoginHistory }
-            else { Write-Host ""; return }
+            # Don't return early if compliance framework is requested
+            elseif (-not $ComplianceFramework) { Write-Host ""; return }
         }
         
         # Custom colored display for risk scores
@@ -2218,7 +3715,8 @@ if ($allLoginHistory.Count -gt 0) {
             
             if ($ExportExcel) { $exportData = $allLoginHistory }
             Write-Host ""
-            if (-not $ExportExcel) { return }
+            # Don't return early if compliance framework is requested
+            if (-not $ExportExcel -and -not $ComplianceFramework) { return }
         }
         
         if ($Minimal) {
@@ -2283,7 +3781,7 @@ if ($allLoginHistory.Count -gt 0) {
             
             $formatted = $allLoginHistory | Format-Table -Property $columns -Wrap
             if ($ExportExcel) { $exportData = $allLoginHistory } else { $formatted }
-        } else {
+                    } else { 
             # Extended view - always show full set plus WHfB fields (when available)
             $columns = @(
                 @{Label='User'; Width=28; Expression={$_.UserName}},
@@ -2407,7 +3905,8 @@ if ($allLoginHistory.Count -gt 0) {
         
         if ($ExportExcel) { $exportData = $allLoginHistory }
         Write-Host ""
-        if (-not $ExportExcel) { return }
+        # Don't return early if compliance framework is requested
+        if (-not $ExportExcel -and -not $ComplianceFramework) { return }
     }
     
     # Sort login events by timestamp (most recent first)
@@ -2524,6 +4023,17 @@ if ($allLoginHistory.Count -gt 0) {
     Write-Host "No login records found matching the criteria." -ForegroundColor Yellow
 }
 
+# Generate Compliance Reports if requested
+$complianceData = $null
+if ($ComplianceFramework -and $ComplianceFramework.Count -gt 0 -and $allLoginHistory.Count -gt 0) {
+    Write-Host ""
+    # Get structured compliance data for export
+    $complianceData = Get-ComplianceData -UserData $allLoginHistory -Frameworks $ComplianceFramework
+    # Display compliance reports
+    New-ComplianceReport -UserData $allLoginHistory -Frameworks $ComplianceFramework
+    Write-Host ""
+}
+
 # Excel Export functionality
 if ($ExportExcel -and $exportData -and $exportData.Count -gt 0) {
     try {
@@ -2535,7 +4045,7 @@ if ($ExportExcel -and $exportData -and $exportData.Count -gt 0) {
             Write-Host "Falling back to CSV export..." -ForegroundColor Yellow
             
             # Fallback to CSV
-            $csvPath = if ($ExcelPath) { $ExcelPath -replace '\.xlsx$', '.csv' } else { "Users_Export.csv" }
+            $csvPath = if ($ExcelPath) { $ExcelPath -replace '\.xlsx$', '.csv' } else { Join-Path $OutputDirectory "Users_Export.csv" }
             $exportData | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
             Write-Host "Data exported to CSV: $csvPath" -ForegroundColor Green
         } else {
@@ -2545,6 +4055,11 @@ if ($ExportExcel -and $exportData -and $exportData.Count -gt 0) {
             # Set default paths if not provided
             if (-not $ExcelPath) {
                 $ExcelPath = if ($ListUsers) { "Users_List.xlsx" } else { "Login_Records.xlsx" }
+            }
+            
+            # Ensure ExcelPath includes the output directory
+            if (-not [System.IO.Path]::IsPathRooted($ExcelPath)) {
+                $ExcelPath = Join-Path $OutputDirectory $ExcelPath
             }
             
             # Set default worksheet name if not provided
@@ -2632,6 +4147,12 @@ if ($ExportExcel -and $exportData -and $exportData.Count -gt 0) {
             
             # Export to Excel with formatting
             $exportDataForExcel | Export-Excel -Path $ExcelPath -WorksheetName $ExcelWorksheet -AutoSize -TableStyle Medium2 -FreezeTopRow -BoldTopRow
+            
+            # Export compliance data if available
+            if ($complianceData -and $complianceData.Count -gt 0) {
+                $complianceData | Export-Excel -Path $ExcelPath -WorksheetName "Compliance" -AutoSize -TableStyle Medium2 -FreezeTopRow -BoldTopRow
+                Write-Host "Compliance data exported to worksheet: Compliance" -ForegroundColor Green
+            }
             
             Write-Host "`nData exported to Excel: $ExcelPath" -ForegroundColor Green
             Write-Host "Worksheet: $ExcelWorksheet" -ForegroundColor Green
@@ -2723,17 +4244,30 @@ if ($ExportExcel -and $exportData -and $exportData.Count -gt 0) {
             }
             
             # CSV Export
-            $csvPath = "${baseName}_${timestamp}.csv"
+            $csvPath = Join-Path $OutputDirectory "${baseName}_${timestamp}.csv"
             $exportDataForExport | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
             Write-Host "Data exported to CSV: $csvPath" -ForegroundColor Green
             
+            # Export compliance data to CSV if available
+            if ($complianceData -and $complianceData.Count -gt 0) {
+                $complianceCsvPath = Join-Path $OutputDirectory "${baseName}_Compliance_${timestamp}.csv"
+                $complianceData | Export-Csv -Path $complianceCsvPath -NoTypeInformation -Encoding UTF8
+                Write-Host "Compliance data exported to CSV: $complianceCsvPath" -ForegroundColor Green
+            }
+            
             # JSON Export
-            $jsonPath = "${baseName}_${timestamp}.json"
-            $exportDataForExport | ConvertTo-Json -Depth 10 | Out-File -FilePath $jsonPath -Encoding UTF8
+            $jsonData = @{
+                UserData = $exportDataForExport
+                ComplianceReports = $complianceData
+                GeneratedAt = Get-Date
+                TotalUsers = $exportDataForExport.Count
+            }
+            $jsonPath = Join-Path $OutputDirectory "${baseName}_${timestamp}.json"
+            $jsonData | ConvertTo-Json -Depth 10 | Out-File -FilePath $jsonPath -Encoding UTF8
             Write-Host "Data exported to JSON: $jsonPath" -ForegroundColor Green
             
             # HTML Report Export
-            $htmlPath = "${baseName}_${timestamp}.html"
+            $htmlPath = Join-Path $OutputDirectory "${baseName}_${timestamp}.html"
             $htmlContent = @"
 <!DOCTYPE html>
 <html>
@@ -2810,6 +4344,49 @@ if ($ExportExcel -and $exportData -and $exportData.Count -gt 0) {
             $htmlContent += @"
         </tbody>
     </table>
+"@
+            
+            # Add compliance section to HTML if available
+            if ($complianceData -and $complianceData.Count -gt 0) {
+                $htmlContent += @"
+    
+    <h2>Compliance Reports</h2>
+    <p>Total Frameworks Analyzed: $($complianceData.Count)</p>
+    <table>
+        <thead>
+            <tr>
+"@
+                # Add compliance table headers
+                $firstCompliance = $complianceData[0]
+                foreach ($property in $firstCompliance.PSObject.Properties.Name) {
+                    $htmlContent += "<th>$property</th>`n"
+                }
+                
+                $htmlContent += @"
+            </tr>
+        </thead>
+        <tbody>
+"@
+                
+                # Add compliance table rows
+                foreach ($report in $complianceData) {
+                    $rowClass = if ($report.OverallStatus -eq "PASS") { "minimal" } else { "high" }
+                    $htmlContent += "<tr class='$rowClass'>`n"
+                    foreach ($property in $report.PSObject.Properties.Name) {
+                        $value = $report.$property
+                        if ($null -eq $value) { $value = "" }
+                        $htmlContent += "<td>$value</td>`n"
+                    }
+                    $htmlContent += "</tr>`n"
+                }
+                
+                $htmlContent += @"
+        </tbody>
+    </table>
+"@
+            }
+            
+            $htmlContent += @"
 </body>
 </html>
 "@
@@ -2818,8 +4395,14 @@ if ($ExportExcel -and $exportData -and $exportData.Count -gt 0) {
             Write-Host "Data exported to HTML: $htmlPath" -ForegroundColor Green
             
             # XML Export
-            $xmlPath = "${baseName}_${timestamp}.xml"
-            $exportDataForExport | Export-Clixml -Path $xmlPath -Depth 10
+            $xmlData = @{
+                UserData = $exportDataForExport
+                ComplianceReports = $complianceData
+                GeneratedAt = Get-Date
+                TotalUsers = $exportDataForExport.Count
+            }
+            $xmlPath = Join-Path $OutputDirectory "${baseName}_${timestamp}.xml"
+            $xmlData | Export-Clixml -Path $xmlPath -Depth 10
             Write-Host "Data exported to XML: $xmlPath" -ForegroundColor Green
         }
     } catch {
@@ -2828,10 +4411,15 @@ if ($ExportExcel -and $exportData -and $exportData.Count -gt 0) {
         Write-Host "Falling back to CSV export..." -ForegroundColor Yellow
         
         # Fallback to CSV
-        $csvPath = if ($ExcelPath) { $ExcelPath -replace '\.xlsx$', '.csv' } else { "Users_Export.csv" }
+        $csvPath = if ($ExcelPath) { $ExcelPath -replace '\.xlsx$', '.csv' } else { Join-Path $OutputDirectory "Users_Export.csv" }
         $exportData | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
         Write-Host "Data exported to CSV: $csvPath" -ForegroundColor Green
     }
+}
+
+# Display security summary if we have user data
+if ($allLoginHistory -and $allLoginHistory.Count -gt 0) {
+    Show-SecuritySummary -UserData $allLoginHistory -LoginData $allLoginHistory
 }
 
 Write-Host ""
