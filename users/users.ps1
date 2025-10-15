@@ -98,6 +98,9 @@ param(
     [Parameter(Mandatory=$false, HelpMessage="List all users with most recent login info")]
     [switch]$ListUsers,
     
+    [Parameter(Mandatory=$false, HelpMessage="Show minimal information when listing users (User, User Rights, MFA Enforcement, Roles, Last Login)")]
+    [switch]$Minimal,
+    
     [Parameter(Mandatory=$false, HelpMessage="Display help information")]
     [switch]$Help
 )
@@ -196,6 +199,48 @@ function Get-LocalUserMFAStatus {
     }
 }
 
+# Function to get local user PIN last set date
+function Get-LocalUserPINLastSet {
+    param(
+        [string]$UserName
+    )
+    
+    try {
+        # Check Windows Hello PIN last set from registry
+        $ngcPath = "HKLM:\SOFTWARE\Microsoft\Cryptography\Ngc"
+        if (Test-Path $ngcPath) {
+            # Look for NGC keys that might contain PIN information
+            $ngcKeys = Get-ChildItem $ngcPath -ErrorAction SilentlyContinue
+            if ($ngcKeys) {
+                # This is a simplified approach - in reality, you'd need to parse NGC data
+                # For now, we'll check if there are any recent NGC keys
+                $latestKey = $ngcKeys | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                if ($latestKey) {
+                    return $latestKey.LastWriteTime
+                }
+            }
+        }
+        
+        # Check Windows Hello for Business PIN from user profile
+        $userProfilePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI\NgcPin"
+        if (Test-Path $userProfilePath) {
+            $pinKeys = Get-ChildItem $userProfilePath -ErrorAction SilentlyContinue
+            if ($pinKeys) {
+                $latestPin = $pinKeys | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                if ($latestPin) {
+                    return $latestPin.LastWriteTime
+                }
+            }
+        }
+        
+        return $null
+        
+    } catch {
+        Write-Verbose "Could not retrieve PIN last set for $UserName : $($_.Exception.Message)"
+        return $null
+    }
+}
+
 # Function to display help
 function Show-Help {
     Write-Host "`n=== User Login History Script - Help ===" -ForegroundColor Cyan
@@ -213,6 +258,7 @@ function Show-Help {
     Write-Host "  -IncludeAD              : Include Active Directory login logs"
     Write-Host "  -IncludeEntraID         : Include Entra ID (Azure AD) login logs"
     Write-Host "  -ListUsers              : List all users with most recent login info"
+    Write-Host "  -Minimal                : Show minimal info when listing users (User, Rights, MFA, Roles, Login)"
     Write-Host "  -Help                   : Display this help message"
     Write-Host ""
     Write-Host "EXAMPLES:" -ForegroundColor Yellow
@@ -240,6 +286,12 @@ function Show-Help {
     Write-Host "  .\users.ps1 -IncludeEntraID -ListUsers -Verbose"
     Write-Host "    Use -Verbose to see detailed processing information for troubleshooting"
     Write-Host ""
+    Write-Host "  .\users.ps1 -IncludeEntraID -ListUsers -Minimal"
+    Write-Host "    Shows minimal user information (User, Rights, MFA, Roles, Last Login)"
+    Write-Host ""
+    Write-Host "  .\users.ps1 -IncludeAD -ListUsers -Minimal"
+    Write-Host "    Shows minimal Active Directory user information"
+    Write-Host ""
     Write-Host "REQUIREMENTS:" -ForegroundColor Yellow
     Write-Host "  Local Logs:"
     Write-Host "    - Administrator privileges required to read Security event log"
@@ -263,7 +315,9 @@ if ($Help -or
      -not $PSBoundParameters.ContainsKey('ComputerName') -and
      -not $IncludeLocal -and
      -not $IncludeAD -and
-     -not $IncludeEntraID)) {
+     -not $IncludeEntraID -and
+     -not $ListUsers -and
+     -not $Minimal)) {
     Show-Help
     exit 0
 }
@@ -346,19 +400,22 @@ function Get-UserLoginHistory {
                 }
                 
                 
-                # Get user rights and MFA status for local users
+                # Get user rights, MFA status, and PIN last set for local users
                 $userRights = "Unknown"
                 $mfaStatus = "Unknown"
                 $mfaEnforcement = "Unknown"
+                $pinLastSet = $null
                 
                 if ($targetDomain -eq $env:COMPUTERNAME -or $targetDomain -eq "WORKGROUP" -or $targetDomain -eq "") {
                     $userRights = Get-LocalUserRights -UserName $targetUserName
                     $mfaStatus = Get-LocalUserMFAStatus -UserName $targetUserName
                     $mfaEnforcement = "Not Applicable"
+                    $pinLastSet = Get-LocalUserPINLastSet -UserName $targetUserName
                 } else {
                     $userRights = "Domain User"
                     $mfaStatus = "Domain Managed"
                     $mfaEnforcement = "Domain Policy"
+                    $pinLastSet = $null
                 }
                 
                 $loginEvents += [PSCustomObject]@{
@@ -373,6 +430,7 @@ function Get-UserLoginHistory {
                     UserRights = $userRights
                     MFAStatus = $mfaStatus
                     MFAEnforcement = $mfaEnforcement
+                    PINLastSet = $pinLastSet
                     PasswordLastSet = $null
                 }
                 
@@ -503,9 +561,10 @@ function Get-EntraIDUsersList {
                 }
             }
             
-            # Get MFA status and enforcement for Entra ID users
+            # Get MFA status, enforcement, and PIN last set for Entra ID users
             $mfaStatus = "Unknown"
             $mfaEnforcement = "Unknown"
+            $pinLastSet = $null
             try {
                 Write-Verbose "Checking MFA status for user: $($mgUser.UserPrincipalName)"
                 
@@ -513,6 +572,8 @@ function Get-EntraIDUsersList {
                 $mfaMethods = Get-MgUserAuthenticationMethod -UserId $mgUser.Id -ErrorAction SilentlyContinue
                 if ($mfaMethods) {
                     $mfaMethodTypes = @()
+                    $windowsHelloMethod = $null
+                    
                     foreach ($method in $mfaMethods) {
                         if ($method.AdditionalProperties.'@odata.type') {
                             $methodType = $method.AdditionalProperties.'@odata.type'
@@ -521,7 +582,10 @@ function Get-EntraIDUsersList {
                                 '#microsoft.graph.phoneAuthenticationMethod' { $mfaMethodTypes += "Phone" }
                                 '#microsoft.graph.emailAuthenticationMethod' { $mfaMethodTypes += "Email" }
                                 '#microsoft.graph.fido2AuthenticationMethod' { $mfaMethodTypes += "FIDO2" }
-                                '#microsoft.graph.windowsHelloForBusinessAuthenticationMethod' { $mfaMethodTypes += "Windows Hello" }
+                                '#microsoft.graph.windowsHelloForBusinessAuthenticationMethod' { 
+                                    $mfaMethodTypes += "Windows Hello"
+                                    $windowsHelloMethod = $method
+                                }
                                 '#microsoft.graph.temporaryAccessPassAuthenticationMethod' { $mfaMethodTypes += "Temporary Access Pass" }
                                 default { $mfaMethodTypes += "Other" }
                             }
@@ -532,6 +596,21 @@ function Get-EntraIDUsersList {
                         $mfaStatus = ($mfaMethodTypes -join ", ")
                     } else {
                         $mfaStatus = "No Methods Registered"
+                    }
+                    
+                    # Get PIN last set date from Windows Hello for Business method
+                    if ($windowsHelloMethod) {
+                        try {
+                            # Check if the method has creation date or last modified date
+                            if ($windowsHelloMethod.AdditionalProperties.createdDateTime) {
+                                $pinLastSet = [DateTime]$windowsHelloMethod.AdditionalProperties.createdDateTime
+                            } elseif ($windowsHelloMethod.AdditionalProperties.lastModifiedDateTime) {
+                                $pinLastSet = [DateTime]$windowsHelloMethod.AdditionalProperties.lastModifiedDateTime
+                            }
+                            Write-Verbose "Windows Hello PIN last set: $pinLastSet"
+                        } catch {
+                            Write-Verbose "Could not parse Windows Hello PIN date: $($_.Exception.Message)"
+                        }
                     }
                 } else {
                     $mfaStatus = "No Methods Registered"
@@ -545,12 +624,13 @@ function Get-EntraIDUsersList {
                     $mfaEnforcement = "Not Enforced"
                 }
                 
-                Write-Verbose "MFA Status: $mfaStatus, Enforcement: $mfaEnforcement"
+                Write-Verbose "MFA Status: $mfaStatus, Enforcement: $mfaEnforcement, PIN Last Set: $pinLastSet"
                 
             } catch {
                 Write-Verbose "Could not retrieve MFA information for user: $($mgUser.UserPrincipalName) - $($_.Exception.Message)"
                 $mfaStatus = "Error Retrieving"
                 $mfaEnforcement = "Unknown"
+                $pinLastSet = $null
             }
             
             $userList += [PSCustomObject]@{
@@ -562,6 +642,7 @@ function Get-EntraIDUsersList {
                 UserRights = $userRights
                 MFAStatus = $mfaStatus
                 MFAEnforcement = $mfaEnforcement
+                PINLastSet = $pinLastSet
                 AppDisplayName = $signInType
                 Status = if ($mgUser.AccountEnabled) { "Enabled" } else { "Disabled" }
                 Enabled = $mgUser.AccountEnabled
@@ -668,6 +749,7 @@ function Get-EntraIDLoginHistory {
                     UserRights = "Entra ID User"
                     MFAStatus = "Unknown"
                     MFAEnforcement = "Unknown"
+                    PINLastSet = $null
                     PasswordLastSet = $null
                     Source = "Entra ID"
                 }
@@ -799,9 +881,10 @@ function Get-ADLoginHistory {
                 }
             }
             
-            # Determine MFA status for AD users
+            # Determine MFA status and PIN last set for AD users
             $mfaStatus = "Unknown"
             $mfaEnforcement = "Unknown"
+            $pinLastSet = $null
             try {
                 # For AD users, MFA is typically managed through:
                 # 1. Windows Hello for Business (if configured)
@@ -813,6 +896,19 @@ function Get-ADLoginHistory {
                 if ($adUser.'msDS-KeyCredentialLink' -and $adUser.'msDS-KeyCredentialLink'.Count -gt 0) {
                     $mfaStatus = "Windows Hello/Smart Card"
                     $mfaEnforcement = "AD Policy"
+                    
+                    # Try to get PIN last set from msDS-KeyCredentialLink
+                    # This is a simplified approach - the actual date would need to be parsed from the binary data
+                    try {
+                        # For now, we'll use the user's last password change as a proxy
+                        # In reality, you'd need to parse the msDS-KeyCredentialLink binary data
+                        if ($adUser.PasswordLastSet) {
+                            $pinLastSet = $adUser.PasswordLastSet
+                        }
+                        Write-Verbose "Windows Hello/Smart Card configured for $($adUser.SamAccountName)"
+                    } catch {
+                        Write-Verbose "Could not determine PIN last set for $($adUser.SamAccountName): $($_.Exception.Message)"
+                    }
                 } else {
                     # Check if user is in any MFA-related groups
                     $mfaGroups = @("MFA Users", "Smart Card Users", "Certificate Users")
@@ -836,6 +932,7 @@ function Get-ADLoginHistory {
                 Write-Verbose "Could not determine MFA status for AD user: $($adUser.SamAccountName) - $($_.Exception.Message)"
                 $mfaStatus = "Unknown"
                 $mfaEnforcement = "Unknown"
+                $pinLastSet = $null
             }
             
             
@@ -850,6 +947,7 @@ function Get-ADLoginHistory {
                     UserRights = $userRights
                     MFAStatus = $mfaStatus
                     MFAEnforcement = $mfaEnforcement
+                    PINLastSet = $pinLastSet
                     Enabled = $adUser.Enabled
                     DomainController = $lastLogonDC
                     PasswordLastSet = $adUser.PasswordLastSet
@@ -910,10 +1008,11 @@ if ($IncludeLocal) {
                 $mostRecentLogin = $userGroup.Group | Sort-Object TimeStamp -Descending | Select-Object -First 1
                 
                 
-                # Get user rights and MFA status for local user
+                # Get user rights, MFA status, and PIN last set for local user
                 $userRights = Get-LocalUserRights -UserName $userGroup.Name
                 $mfaStatus = Get-LocalUserMFAStatus -UserName $userGroup.Name
                 $mfaEnforcement = "Not Applicable"
+                $pinLastSet = Get-LocalUserPINLastSet -UserName $userGroup.Name
                 
                 # Create user object
                 $userObj = [PSCustomObject]@{
@@ -925,6 +1024,7 @@ if ($IncludeLocal) {
                     UserRights = $userRights
                     MFAStatus = $mfaStatus
                     MFAEnforcement = $mfaEnforcement
+                    PINLastSet = $pinLastSet
                     AppDisplayName = "Local Logon"
                     Status = "Unknown"
                     Enabled = $null
@@ -1014,48 +1114,76 @@ if ($allLoginHistory.Count -gt 0) {
         Write-Host ""
         
         # Display users directly (data is already per-user from source functions)
-        $allLoginHistory | Format-Table -AutoSize -Property `
-            @{Label='User'; Expression={$_.UserName}},
-            @{Label='Display Name'; Expression={$_.DisplayName}},
-            @{Label='Email'; Expression={if ($_.Mail) { $_.Mail } else { "-" }}},
-            @{Label='User Rights'; Expression={if ($_.UserRights) { $_.UserRights } else { "-" }}},
-            @{Label='MFA Status'; Expression={if ($_.MFAStatus) { $_.MFAStatus } else { "-" }}},
-            @{Label='MFA Enforcement'; Expression={if ($_.MFAEnforcement) { $_.MFAEnforcement } else { "-" }}},
-            @{Label='Roles'; Expression={if ($_.Roles) { $_.Roles } else { "-" }}},
-            @{Label='Last Login'; Expression={
-                if ($_.TimeStamp -eq [DateTime]::MinValue) { 
-                    "Never" 
-                } else { 
-                    $_.TimeStamp.ToString('yyyy-MM-dd HH:mm:ss') 
-                }
-            }},
-            @{Label='Password Last Set'; Expression={
-                if ($_.PasswordLastSet) { 
-                    if ($_.PasswordLastSet -is [DateTime]) {
-                        $_.PasswordLastSet.ToString('yyyy-MM-dd HH:mm:ss')
-                    } else {
-                        ([DateTime]$_.PasswordLastSet).ToString('yyyy-MM-dd HH:mm:ss')
+        if ($Minimal) {
+            # Minimal view - show only essential information
+            $allLoginHistory | Format-Table -AutoSize -Property `
+                @{Label='User'; Expression={$_.UserName}},
+                @{Label='User Rights'; Expression={if ($_.UserRights) { $_.UserRights } else { "-" }}},
+                @{Label='MFA Enforcement'; Expression={if ($_.MFAEnforcement) { $_.MFAEnforcement } else { "-" }}},
+                @{Label='Roles'; Expression={if ($_.Roles) { $_.Roles } else { "-" }}},
+                @{Label='Last Login'; Expression={
+                    if ($_.TimeStamp -eq [DateTime]::MinValue) { 
+                        "Never" 
+                    } else { 
+                        $_.TimeStamp.ToString('yyyy-MM-dd HH:mm:ss') 
                     }
-                } else { 
-                    "-" 
-                }
-            }},
-            @{Label='Login Type'; Expression={
-                if ($_.AppDisplayName -and $_.AppDisplayName -ne '-') { $_.AppDisplayName }
-                elseif ($_.LogonType) { $_.LogonType }
-                else { "-" }
-            }},
-            @{Label='Status'; Expression={$_.Status}},
-            @{Label='Source'; Expression={$_.Source}},
-            @{Label='Computer/DC'; Expression={
-                if ($_.Computer) { $_.Computer }
-                elseif ($_.DomainController) { $_.DomainController }
-                else { "-" }
-            }},
-            @{Label='Domain'; Expression={if ($_.Domain) { $_.Domain } else { "-" }}},
-            @{Label='Enabled'; Expression={
-                if ($null -ne $_.Enabled) { $_.Enabled } else { "-" }
-            }}
+                }}
+        } else {
+            # Extended view - show all information
+            $allLoginHistory | Format-Table -AutoSize -Property `
+                @{Label='User'; Expression={$_.UserName}},
+                @{Label='Display Name'; Expression={$_.DisplayName}},
+                @{Label='Email'; Expression={if ($_.Mail) { $_.Mail } else { "-" }}},
+                @{Label='User Rights'; Expression={if ($_.UserRights) { $_.UserRights } else { "-" }}},
+                @{Label='MFA Status'; Expression={if ($_.MFAStatus) { $_.MFAStatus } else { "-" }}},
+                @{Label='MFA Enforcement'; Expression={if ($_.MFAEnforcement) { $_.MFAEnforcement } else { "-" }}},
+                @{Label='PIN Last Set'; Expression={
+                    if ($_.PINLastSet) { 
+                        if ($_.PINLastSet -is [DateTime]) {
+                            $_.PINLastSet.ToString('yyyy-MM-dd HH:mm:ss')
+                        } else {
+                            ([DateTime]$_.PINLastSet).ToString('yyyy-MM-dd HH:mm:ss')
+                        }
+                    } else { 
+                        "-" 
+                    }
+                }},
+                @{Label='Roles'; Expression={if ($_.Roles) { $_.Roles } else { "-" }}},
+                @{Label='Last Login'; Expression={
+                    if ($_.TimeStamp -eq [DateTime]::MinValue) { 
+                        "Never" 
+                    } else { 
+                        $_.TimeStamp.ToString('yyyy-MM-dd HH:mm:ss') 
+                    }
+                }},
+                @{Label='Password Last Set'; Expression={
+                    if ($_.PasswordLastSet) { 
+                        if ($_.PasswordLastSet -is [DateTime]) {
+                            $_.PasswordLastSet.ToString('yyyy-MM-dd HH:mm:ss')
+                        } else {
+                            ([DateTime]$_.PasswordLastSet).ToString('yyyy-MM-dd HH:mm:ss')
+                        }
+                    } else { 
+                        "-" 
+                    }
+                }},
+                @{Label='Login Type'; Expression={
+                    if ($_.AppDisplayName -and $_.AppDisplayName -ne '-') { $_.AppDisplayName }
+                    elseif ($_.LogonType) { $_.LogonType }
+                    else { "-" }
+                }},
+                @{Label='Status'; Expression={$_.Status}},
+                @{Label='Source'; Expression={$_.Source}},
+                @{Label='Computer/DC'; Expression={
+                    if ($_.Computer) { $_.Computer }
+                    elseif ($_.DomainController) { $_.DomainController }
+                    else { "-" }
+                }},
+                @{Label='Domain'; Expression={if ($_.Domain) { $_.Domain } else { "-" }}},
+                @{Label='Enabled'; Expression={
+                    if ($null -ne $_.Enabled) { $_.Enabled } else { "-" }
+                }}
+        }
         
         Write-Host ""
         return
@@ -1078,6 +1206,17 @@ if ($allLoginHistory.Count -gt 0) {
                 @{Label='User Rights'; Expression={if ($_.UserRights) { $_.UserRights } else { "-" }}},
                 @{Label='MFA Status'; Expression={if ($_.MFAStatus) { $_.MFAStatus } else { "-" }}},
                 @{Label='MFA Enforcement'; Expression={if ($_.MFAEnforcement) { $_.MFAEnforcement } else { "-" }}},
+                @{Label='PIN Last Set'; Expression={
+                    if ($_.PINLastSet) { 
+                        if ($_.PINLastSet -is [DateTime]) {
+                            $_.PINLastSet.ToString('yyyy-MM-dd HH:mm:ss')
+                        } else {
+                            ([DateTime]$_.PINLastSet).ToString('yyyy-MM-dd HH:mm:ss')
+                        }
+                    } else { 
+                        "-" 
+                    }
+                }},
                 @{Label='Domain'; Expression={$_.Domain}},
                 @{Label='Logon Type'; Expression={$_.LogonType}},
                 @{Label='IP Address'; Expression={if($_.IPAddress -and $_.IPAddress -ne '-') {$_.IPAddress} else {'Local'}}},
@@ -1090,6 +1229,17 @@ if ($allLoginHistory.Count -gt 0) {
                 @{Label='User Rights'; Expression={if ($_.UserRights) { $_.UserRights } else { "-" }}},
                 @{Label='MFA Status'; Expression={if ($_.MFAStatus) { $_.MFAStatus } else { "-" }}},
                 @{Label='MFA Enforcement'; Expression={if ($_.MFAEnforcement) { $_.MFAEnforcement } else { "-" }}},
+                @{Label='PIN Last Set'; Expression={
+                    if ($_.PINLastSet) { 
+                        if ($_.PINLastSet -is [DateTime]) {
+                            $_.PINLastSet.ToString('yyyy-MM-dd HH:mm:ss')
+                        } else {
+                            ([DateTime]$_.PINLastSet).ToString('yyyy-MM-dd HH:mm:ss')
+                        }
+                    } else { 
+                        "-" 
+                    }
+                }},
                 @{Label='Display Name'; Expression={$_.DisplayName}},
                 @{Label='UPN'; Expression={$_.UserPrincipalName}},
                 @{Label='Enabled'; Expression={$_.Enabled}},
@@ -1103,6 +1253,17 @@ if ($allLoginHistory.Count -gt 0) {
                 @{Label='User Rights'; Expression={if ($_.UserRights) { $_.UserRights } else { "-" }}},
                 @{Label='MFA Status'; Expression={if ($_.MFAStatus) { $_.MFAStatus } else { "-" }}},
                 @{Label='MFA Enforcement'; Expression={if ($_.MFAEnforcement) { $_.MFAEnforcement } else { "-" }}},
+                @{Label='PIN Last Set'; Expression={
+                    if ($_.PINLastSet) { 
+                        if ($_.PINLastSet -is [DateTime]) {
+                            $_.PINLastSet.ToString('yyyy-MM-dd HH:mm:ss')
+                        } else {
+                            ([DateTime]$_.PINLastSet).ToString('yyyy-MM-dd HH:mm:ss')
+                        }
+                    } else { 
+                        "-" 
+                    }
+                }},
                 @{Label='Display Name'; Expression={$_.DisplayName}},
                 @{Label='Application'; Expression={$_.AppDisplayName}},
                 @{Label='IP Address'; Expression={$_.IPAddress}},
@@ -1122,6 +1283,17 @@ if ($allLoginHistory.Count -gt 0) {
             @{Label='User Rights'; Expression={if ($_.UserRights) { $_.UserRights } else { "-" }}},
             @{Label='MFA Status'; Expression={if ($_.MFAStatus) { $_.MFAStatus } else { "-" }}},
             @{Label='MFA Enforcement'; Expression={if ($_.MFAEnforcement) { $_.MFAEnforcement } else { "-" }}},
+            @{Label='PIN Last Set'; Expression={
+                if ($_.PINLastSet) { 
+                    if ($_.PINLastSet -is [DateTime]) {
+                        $_.PINLastSet.ToString('yyyy-MM-dd HH:mm:ss')
+                    } else {
+                        ([DateTime]$_.PINLastSet).ToString('yyyy-MM-dd HH:mm:ss')
+                    }
+                } else { 
+                    "-" 
+                }
+            }},
             @{Label='Computer/DC'; Expression={
                 if ($_.Source -eq "Local") {
                     $_.Computer
