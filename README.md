@@ -1178,25 +1178,6 @@ foreach ($dept in $departments) {
 
 ## 📞 Support & Resources
 
-### Documentation Files
-
-Located in the `users/` directory:
-
-- **`COMPLIANCE_EXPORT_GUIDE.md`** - Detailed compliance export documentation
-- **`COMPLIANCE_QUICK_REF.txt`** - Quick reference card (print-friendly)
-- **`ADVANCED_FEATURES_GUIDE.md`** - Advanced filtering and caching
-- **`COMPLIANCE_DATA_MAPPING.md`** - Data sources for compliance frameworks
-- **`QUICK_REFERENCE.md`** - Command examples and tips
-- **`CHANGELOG.md`** - Version history and changes
-
-### Testing
-
-See `TEST_COMPLIANCE_EXPORT.md` for:
-- Testing procedures
-- Validation checklists
-- Sample test scripts
-- Troubleshooting tests
-
 ### Getting Help
 
 ```powershell
