@@ -2412,8 +2412,32 @@ function Get-RiskySigninsAnalysis {
 }
 
 # Function to display help
+function Show-LOGISEKBanner {
+    Write-Host ""
+    
+    # LOGISEK ASCII Art using here-string
+    $asciiArt = @"
+                                                                      
+         _____   ______ _____ _______ _______ _     _
+ |      |     | |  ____   |   |______ |______ |____/ 
+ |_____ |_____| |_____| __|__ ______| |______ |    \_
+                                                                  
+                                                                      
+"@
+    
+    Write-Host $asciiArt -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  ITAuditKit v1.0" -ForegroundColor Yellow
+    Write-Host "  GNU General Public License v3.0" -ForegroundColor Green
+    Write-Host "  https://logisek.com" -ForegroundColor Green
+    Write-Host "  info@logisek.com" -ForegroundColor Green
+    Write-Host ""
+    Write-Host ""
+}
+
 function Show-Help {
-    Write-Host "`n=== User Login History Script - Help ===" -ForegroundColor Cyan
+    Show-LOGISEKBanner
+    Write-Host "=== User Audit Script - Help ===" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "DESCRIPTION:" -ForegroundColor Yellow
     Write-Host "  Retrieves user login timestamps from local computer Windows Event Log,"
@@ -2653,6 +2677,11 @@ if ($Help -or
      -not $Profile)) {
     Show-Help
     exit 0
+}
+
+# Display LOGISEK banner for main execution
+if (-not $Help) {
+    Show-LOGISEKBanner
 }
 
 # If no source is specified, default to Local
