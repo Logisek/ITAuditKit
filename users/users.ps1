@@ -2,12 +2,13 @@
 
 <#
 .SYNOPSIS
-    Retrieves user login timestamps from local computer, Active Directory, and/or Entra ID.
+    Comprehensive IT security audit tool for user accounts, login activities, and security posture analysis.
 
 .DESCRIPTION
-    This script retrieves user login information from local computer Windows Event Log,
-    Active Directory, and/or Entra ID (Azure AD) sign-in logs. It displays the last X 
-    login timestamps in human-readable format using the current computer's timezone.
+    This script provides comprehensive security auditing capabilities across multiple sources including
+    local Windows Event Log, Active Directory, and Entra ID (Azure AD). It performs detailed security
+    risk assessment, compliance reporting, user behavior analysis, and provides advanced filtering
+    and export options for security teams and compliance officers.
 
 .PARAMETER UserName
     The username to query login history for. If not specified, queries all users.
@@ -2425,12 +2426,12 @@ function Show-LOGISEKBanner {
                                                                       
 "@
     
-    Write-Host $asciiArt -ForegroundColor Cyan
+    Write-Host $asciiArt -ForegroundColor DarkMagenta
     Write-Host ""
     Write-Host "  ITAuditKit v1.0" -ForegroundColor Yellow
-    Write-Host "  GNU General Public License v3.0" -ForegroundColor Green
-    Write-Host "  https://logisek.com" -ForegroundColor Green
-    Write-Host "  info@logisek.com" -ForegroundColor Green
+    Write-Host "  GNU General Public License v3.0" -ForegroundColor White
+    Write-Host "  https://logisek.com" -ForegroundColor White
+    Write-Host "  info@logisek.com" -ForegroundColor White
     Write-Host ""
     Write-Host ""
 }
@@ -2440,9 +2441,10 @@ function Show-Help {
     Write-Host "=== User Audit Script - Help ===" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "DESCRIPTION:" -ForegroundColor Yellow
-    Write-Host "  Retrieves user login timestamps from local computer Windows Event Log,"
-    Write-Host "  Active Directory, and/or Entra ID (Azure AD) sign-in logs."
-    Write-Host "  Displays timestamps in human-readable format using the computer's local timezone."
+    Write-Host "  Comprehensive IT security audit tool that analyzes user accounts, login activities,"
+    Write-Host "  and security posture across multiple sources including local Windows Event Log,"
+    Write-Host "  Active Directory, and Entra ID (Azure AD). Provides detailed security risk assessment,"
+    Write-Host "  compliance reporting, and user behavior analysis with advanced filtering and export options."
     Write-Host ""
     Write-Host "PARAMETERS:" -ForegroundColor Yellow
     Write-Host "  -UserName <string>      : Filter by specific username (optional)"
